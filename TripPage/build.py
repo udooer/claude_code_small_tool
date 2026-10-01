@@ -27,6 +27,11 @@ def tel(num):
     return "tel:" + re.sub(r"[^\d+]", "", num)
 
 
+def has_icon(text):
+    c = ord(text[0])
+    return 0x2190 <= c < 0x2C00 or c >= 0x1F000
+
+
 def render_item(it, city=""):
     icon, label = TYPES.get(it.get("type", "other"), TYPES["other"])
     q = it.get("address") or (it.get("title", "") + " " + city).strip()
@@ -45,7 +50,7 @@ def render_item(it, city=""):
         f'<div class="body"><div class="ttl">{icon} {E(it.get("title", ""))}</div>'
         + (f'<div class="det">{E(it["detail"])}</div>' if it.get("detail") else "")
         + (f'<div class="det addr">{E(it["address"])}</div>' if it.get("address") else "")
-        + (f'<div class="det note">{"" if ord(it["note"][0]) > 0x2000 else "💡 "}{E(it["note"])}</div>' if it.get("note") else "")
+        + (f'<div class="det note">{"" if has_icon(it["note"]) else "💡 "}{E(it["note"])}</div>' if it.get("note") else "")
         + (f'<div class="meta">{"".join(meta)}</div>' if meta else "")
         + (f'<div class="acts">{"".join(actions)}</div>' if actions else "")
         + "</div></li>"
