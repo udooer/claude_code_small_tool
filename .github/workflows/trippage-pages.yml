@@ -1,0 +1,34 @@
+name: Deploy TripPage to GitHub Pages
+on:
+  push:
+    branches: [main]
+    paths: ["TripPage/trips/*.json", "TripPage/build.py"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build every trips/<name>.json -> _site/<name>/
+        run: |
+          mkdir -p _site
+          echo '<!doctype html><meta name="robots" content="noindex">' > _site/index.html
+          for f in TripPage/trips/*.json; do
+            [ -e "$f" ] || continue
+            python3 TripPage/build.py "$f" -o "_site/$(basename "$f" .json)"
+          done
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: _site }
+      - id: deployment
+        uses: actions/deploy-pages@v4

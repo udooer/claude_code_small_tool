@@ -1,0 +1,35 @@
+{
+  "title": "京都 4 日散策",
+  "subtitle": "2026/11/20 – 11/23",
+  "timezone": "Asia/Tokyo",
+  "overview": {
+    "notes": ["京都市巴士一日券 ¥700，市區景點多半適用", "寺廟多在 16:30~17:00 關門"],
+    "contacts": [
+      {"label": "台灣駐大阪辦事處急難", "value": "+81-90-8794-4568"},
+      {"label": "報警 / 救護", "value": "110 / 119"}
+    ]
+  },
+  "days": [
+    {
+      "date": "2026-11-20",
+      "title": "抵達 & 祇園夜走",
+      "highlight": "晚上 18:00 前入住，夜間祇園白川散步",
+      "weather": "12~19°C，晚間偏涼，帶薄外套",
+      "lodging": {
+        "name": "京都站前飯店 Example",
+        "address": "京都市下京区烏丸通七条下ル",
+        "phone": "+81-75-000-0000",
+        "checkin": "15:00",
+        "booking": "訂單 #ABC123"
+      },
+      "items": [
+        {"time": "10:30", "type": "transport", "title": "關西機場 → 京都 (HARUKA)", "detail": "月台 5 號，約 80 分鐘", "cost": "¥3,000", "booking": "e-ticket 在 Email"},
+        {"time": "13:00", "type": "food", "title": "午餐：錦市場", "address": "京都市中京区錦小路通"},
+        {"time": "15:00", "type": "lodging", "title": "Check-in", "detail": "先寄放行李也可以"},
+        {"time": "17:30", "type": "sight", "title": "八坂神社 → 花見小路 → 白川", "url": "https://www.yasaka-jinja.or.jp/"}
+      ],
+      "notes": ["末班地鐵約 23:30"]
+    }
+  ],
+  "checklist": ["護照", "網卡 / eSIM", "Suica / ICOCA", "行動電源"]
+}
