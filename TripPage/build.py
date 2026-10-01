@@ -27,9 +27,9 @@ def tel(num):
     return "tel:" + re.sub(r"[^\d+]", "", num)
 
 
-def render_item(it):
+def render_item(it, city=""):
     icon, label = TYPES.get(it.get("type", "other"), TYPES["other"])
-    q = it.get("address") or it.get("title", "")
+    q = it.get("address") or (it.get("title", "") + " " + city).strip()
     actions = []
     if it.get("map") or it.get("address") or it.get("type") in ("sight", "food", "lodging"):
         actions.append(link(it.get("map") or maps_url(q), "地圖"))
@@ -45,7 +45,7 @@ def render_item(it):
         f'<div class="body"><div class="ttl">{icon} {E(it.get("title", ""))}</div>'
         + (f'<div class="det">{E(it["detail"])}</div>' if it.get("detail") else "")
         + (f'<div class="det addr">{E(it["address"])}</div>' if it.get("address") else "")
-        + (f'<div class="det note">💡 {E(it["note"])}</div>' if it.get("note") else "")
+        + (f'<div class="det note">{"" if ord(it["note"][0]) > 0x2000 else "💡 "}{E(it["note"])}</div>' if it.get("note") else "")
         + (f'<div class="meta">{"".join(meta)}</div>' if meta else "")
         + (f'<div class="acts">{"".join(actions)}</div>' if actions else "")
         + "</div></li>"
@@ -73,7 +73,7 @@ def render_day(i, d):
         + (f'<div class="card hl">⭐ {E(d["highlight"])}</div>' if d.get("highlight") else "")
         + (f'<div class="card wx">🌤 {E(d["weather"])}</div>' if d.get("weather") else "")
         + render_lodging(d.get("lodging"))
-        + f'<ul class="items">{"".join(render_item(x) for x in d.get("items", []))}</ul>'
+        + f'<ul class="items">{"".join(render_item(x, d.get("city", "")) for x in d.get("items", []))}</ul>'
         + (f'<div class="card warn"><b>⚠️ 注意事項</b><ul>{notes}</ul></div>' if notes else "")
         + "</section>"
     )
@@ -84,6 +84,10 @@ def render_overview(trip):
     parts = []
     if ov.get("notes"):
         parts.append('<div class="card warn"><b>⚠️ 行前重點</b><ul>' + "".join(f"<li>{E(n)}</li>" for n in ov["notes"]) + "</ul></div>")
+    for sec in ov.get("sections", []):
+        cls = "card warn" if sec.get("warn") else "card"
+        rows = "".join(f"<li>{E(x)}</li>" for x in sec.get("items", []))
+        parts.append(f'<div class="{cls}"><b>{E(sec["title"])}</b><ul>{rows}</ul></div>')
     if ov.get("contacts"):
         rows = "".join(
             f'<li>{E(c["label"])}：<a href="{E(tel(c["value"]), True)}">{E(c["value"])}</a></li>' for c in ov["contacts"])
@@ -111,7 +115,7 @@ h2{font-size:1.15rem;margin:8px 0 12px}h2 small{display:block;color:var(--mut);f
 .items{list-style:none;padding:0;margin:12px 0}
 .item{display:flex;gap:12px;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ac);border-radius:12px;padding:10px 12px;margin:10px 0}
 .t-transport{border-left-color:#d97706}.t-food{border-left-color:#16a34a}.t-lodging{border-left-color:#9333ea}
-.time{flex:none;width:3.6em;font-size:.9rem;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;color:var(--mut);font-weight:600}
+.time:empty{display:none}.time{flex:none;width:3.6em;font-size:.9rem;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;color:var(--mut);font-weight:600}
 .ttl{font-weight:600}.det{color:var(--mut);font-size:.92rem;white-space:pre-line;overflow-wrap:anywhere}.meta{font-size:.9rem;display:flex;gap:12px;flex-wrap:wrap;margin-top:2px}
 .acts{display:flex;gap:8px;margin-top:6px}.btn{font-size:.85rem;padding:3px 12px;border-radius:999px;border:1px solid var(--ac);color:var(--ac);text-decoration:none}
 a{color:var(--ac)}footer{text-align:center;color:var(--mut);font-size:.8rem;padding:16px}
