@@ -4,3 +4,4 @@ TripPage/dist/
 TripPage/raw*
 dist/
 *.csv
+*.xlsx

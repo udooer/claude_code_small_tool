@@ -11,6 +11,9 @@
 
 1. **輸入**
    - Google Sheet：設為「知道連結者可檢視」，`python TripPage/fetch_sheet.py "<網址>" > TripPage/raw.csv`（或直接貼給 Claude）
+   - **多分頁的 Sheet（每天一頁）建議用 xlsx 匯入**：檔案 → 下載 → Microsoft Excel (.xlsx)，本機執行
+     `python TripPage/import_xlsx.py 行程.xlsx --year 2026 --title "標題" -o TripPage/trips/<亂碼名稱>.json`
+     （完整讀取儲存格，不會被截斷，資料也不經過任何第三方；分頁名稱需為 `10/9 (Day 1) 維也納` 格式）
    - 文字：直接貼給 Claude
 2. **整理**：請 Claude「依 `TripPage/PROMPT.md` 把 raw 內容整理成 `TripPage/trips/<名稱>.json`」。含糊或矛盾處會列出「待確認」，不會亂猜。
 3. **建置（加密）**：`pip install cryptography`，然後
