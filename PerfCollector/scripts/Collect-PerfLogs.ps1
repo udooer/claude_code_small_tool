@@ -61,7 +61,7 @@ param(
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Continue'
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.0.1'
 $ToolRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $ToolsDir = Join-Path $ToolRoot 'tools'
 
@@ -77,7 +77,19 @@ function Write-Log {
     $line = '{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'), $Kind, $Message
     $color = @{ INFO = 'Gray'; WARN = 'Yellow'; ERROR = 'Red'; STEP = 'Cyan' }[$Kind]
     Write-Host $line -ForegroundColor $color
-    if ($script:LogFile) { Add-Content -Path $script:LogFile -Value $line -Encoding UTF8 }
+    # Logging must never break collection: on a USB drive, AV or the indexer can hold the file
+    # briefly and Add-Content then fails with "Stream was not readable". Keep one shared writer open.
+    if ($script:LogFile) {
+        try {
+            if (-not $script:LogWriter) {
+                $fs = New-Object IO.FileStream($script:LogFile, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+                $script:LogWriter = New-Object IO.StreamWriter($fs, (New-Object Text.UTF8Encoding($true)))
+                $script:LogWriter.AutoFlush = $true
+            }
+            $script:LogWriter.WriteLine($line)
+        }
+        catch { }
+    }
 }
 
 function Get-Wmi {
@@ -781,6 +793,7 @@ $script:EvtDir = Join-Path $script:OutRoot 'eventlogs'
 $script:DumpDir = Join-Path $script:OutRoot 'dumps'
 foreach ($d in $script:OutRoot, $script:InfoDir, $script:EvtDir) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 $script:LogFile = Join-Path $script:OutRoot 'collect.log'
+$script:LogWriter = $null
 $script:TriggerReason = $null
 $script:CounterCsv = $null
 $script:CounterMap = @{}
@@ -937,6 +950,7 @@ if (-not $NoZip) {
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
         $script:LogFile = $null   # stop writing into the folder being zipped
+        if ($script:LogWriter) { $script:LogWriter.Dispose(); $script:LogWriter = $null }
         [System.IO.Compression.ZipFile]::CreateFromDirectory($script:OutRoot, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $true)
         Remove-Item -Recurse -Force $script:OutRoot -ErrorAction SilentlyContinue
         $final = $zip
