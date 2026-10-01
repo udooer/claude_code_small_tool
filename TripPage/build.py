@@ -4,8 +4,10 @@
 用法:
   python build.py trip.json -o dist            # 產生 dist/index.html
   python build.py trip.json -o dist --slug     # 產生 dist/<隨機碼>/index.html (不易被猜到的網址)
+  python build.py trip.json -o dist --password "密碼"   # 內容用 AES-256-GCM 加密, 開啟時需輸入密碼
+                                                       # (需要 pip install cryptography)
 """
-import argparse, html, json, re, secrets, sys, urllib.parse
+import argparse, base64, hashlib, html, json, os, re, secrets, sys, urllib.parse
 from pathlib import Path
 
 E = html.escape
@@ -143,6 +145,47 @@ def build(trip):
 <script>{JS}</script></body></html>"""
 
 
+ITER = 600_000
+
+LOCK_JS = """
+(async function(){
+var D=%s,b=function(s){return Uint8Array.from(atob(s),function(c){return c.charCodeAt(0)})};
+var f=document.getElementById('f'),pw=document.getElementById('pw'),msg=document.getElementById('m');
+async function open_(p){var k=await crypto.subtle.importKey('raw',new TextEncoder().encode(p),'PBKDF2',false,['deriveKey']);
+var key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:b(D.s),iterations:D.n,hash:'SHA-256'},k,{name:'AES-GCM',length:256},false,['decrypt']);
+var t=await crypto.subtle.decrypt({name:'AES-GCM',iv:b(D.i)},key,b(D.c));return new TextDecoder().decode(t)}
+async function go(p,auto){msg.textContent='解鎖中…';
+try{var h=await open_(p);try{localStorage.setItem('tp_pw_'+D.s,p)}catch(e){}document.open();document.write(h);document.close()}
+catch(e){msg.textContent=auto?'':'密碼錯誤';if(auto){try{localStorage.removeItem('tp_pw_'+D.s)}catch(e){}}}}
+f.onsubmit=function(e){e.preventDefault();go(pw.value,false)};
+var saved;try{saved=localStorage.getItem('tp_pw_'+D.s)}catch(e){}
+if(saved)go(saved,true);else msg.textContent='';
+})();
+"""
+
+
+def encrypt_page(inner_html, password, title="旅遊行程"):
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        sys.exit("--password 需要 cryptography 套件: pip install cryptography")
+    salt, iv = os.urandom(16), os.urandom(12)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, ITER, dklen=32)
+    ct = AESGCM(key).encrypt(iv, inner_html.encode(), None)
+    b64 = lambda x: base64.b64encode(x).decode()
+    data = json.dumps({"s": b64(salt), "i": b64(iv), "c": b64(ct), "n": ITER})
+    return f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>{E(title)}</title><style>
+body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:16px -apple-system,"Noto Sans TC",sans-serif;background:#f6f7f9;color:#1b1f24}}
+@media(prefers-color-scheme:dark){{body{{background:#111418;color:#e8eaed}}}}
+form{{width:min(320px,86vw);text-align:center}}input,button{{width:100%;padding:12px;margin-top:10px;font-size:1rem;border-radius:10px;border:1px solid #8896;box-sizing:border-box}}
+button{{background:#2563eb;color:#fff;border:0}}#m{{color:#d33;min-height:1.5em;margin-top:8px}}</style></head><body>
+<form id="f"><div style="font-size:2rem">🔒</div><p>請輸入密碼</p>
+<input id="pw" type="password" autocomplete="current-password" autofocus><button>解鎖</button><div id="m"></div></form>
+<script>{LOCK_JS % data}</script></body></html>"""
+
+
 def validate(trip):
     errs = []
     if not trip.get("days"):
@@ -162,6 +205,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trip"), ap.add_argument("-o", "--out", default="dist")
     ap.add_argument("--slug", action="store_true", help="輸出到隨機子目錄")
+    ap.add_argument("--password", help="以此密碼加密整個頁面")
     a = ap.parse_args()
     trip = json.loads(Path(a.trip).read_text(encoding="utf-8"))
     errs = validate(trip)
@@ -171,7 +215,12 @@ def main():
     if a.slug:
         out = out / secrets.token_urlsafe(8).replace("_", "x").replace("-", "y")
     out.mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(build(trip), encoding="utf-8")
+    page = build(trip)
+    if a.password:
+        if len(a.password) < 8:
+            sys.exit("密碼至少 8 個字元 (建議 4 個英文單字以上)")
+        page = encrypt_page(page, a.password)
+    (out / "index.html").write_text(page, encoding="utf-8")
     print(f"OK -> {out / 'index.html'}")
 
 

@@ -1,8 +1,9 @@
 name: Deploy TripPage to GitHub Pages
+# 只部署 TripPage/site/ 內「已加密」的頁面 (用 build.py --password 產生)
 on:
   push:
     branches: [main]
-    paths: ["TripPage/trips/*.json", "TripPage/build.py"]
+    paths: ["TripPage/site/**"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,16 +20,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build every trips/<name>.json -> _site/<name>/
+      - name: Refuse unencrypted pages
         run: |
-          mkdir -p _site
-          echo '<!doctype html><meta name="robots" content="noindex">' > _site/index.html
-          for f in TripPage/trips/*.json; do
+          for f in TripPage/site/*/index.html; do
             [ -e "$f" ] || continue
-            python3 TripPage/build.py "$f" -o "_site/$(basename "$f" .json)"
+            grep -q 'name="f"\|id="f"' "$f" && grep -q 'AES\|PBKDF2' "$f" || { echo "未加密: $f"; exit 1; }
           done
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
-        with: { path: _site }
+        with: { path: TripPage/site }
       - id: deployment
         uses: actions/deploy-pages@v4

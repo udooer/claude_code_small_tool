@@ -1,0 +1,6 @@
+# TripPage: 明文行程與未加密輸出絕不進 repo
+TripPage/trips/
+TripPage/dist/
+TripPage/raw*
+dist/
+*.csv

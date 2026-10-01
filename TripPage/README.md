@@ -10,12 +10,15 @@
 ## 流程
 
 1. **輸入**
-   - Google Sheet：設為「知道連結者可檢視」，`python TripPage/fetch_sheet.py "<網址>" > raw.csv`（或直接把內容貼給 Claude）
+   - Google Sheet：設為「知道連結者可檢視」，`python TripPage/fetch_sheet.py "<網址>" > TripPage/raw.csv`（或直接貼給 Claude）
    - 文字：直接貼給 Claude
-2. **整理**：請 Claude「依 `TripPage/PROMPT.md` 把 raw 內容整理成 `TripPage/trips/<名稱>.json`」。含糊或矛盾處它會列出「待確認」，不會亂猜。
-3. **預覽**：`python TripPage/build.py TripPage/trips/<名稱>.json -o dist` → 開 `dist/index.html`
-4. **發佈**：commit + push 到 `main`，GitHub Actions 自動把所有 `trips/*.json` 建置並部署。
-5. **使用**：手機開網址 →「加入主畫面」。
+2. **整理**：請 Claude「依 `TripPage/PROMPT.md` 把 raw 內容整理成 `TripPage/trips/<名稱>.json`」。含糊或矛盾處會列出「待確認」，不會亂猜。
+3. **建置（加密）**：`pip install cryptography`，然後
+   `python TripPage/build.py TripPage/trips/<名稱>.json -o TripPage/site/<亂碼名稱> --password "長密碼"`
+4. **發佈**（擇一）
+   - **Netlify**：把 `TripPage/site/<亂碼名稱>/` 拖進 Netlify Drop
+   - **GitHub Pages**：commit `TripPage/site/` 並 push 到 `main`，Actions 自動部署
+5. **使用**：手機開網址 → 輸入一次密碼（之後記在手機上）→「加入主畫面」。
 
 ## 網頁功能
 
@@ -25,18 +28,17 @@
 - 行李清單可勾選（記在手機本機）、緊急聯絡電話
 - 單一 HTML、無外部資源、深色模式、可列印；載入一次後離線也能看
 
-## 一次性設定
+## 一次性設定（僅 GitHub Pages）
 
-1. repo → Settings → Pages → Source 選 **GitHub Actions**
-2. 把本分支合併到 `main`（workflow 只在 `main` push 時觸發，也可手動 Run workflow）
+repo → Settings → Pages → Source 選 **GitHub Actions**；本分支合併到 `main` 後生效。
 
-## 隱私提醒
+## 隱私與開源安全
 
-行程含住宿地址與訂位編號。GitHub Pages 網址是公開的（有網址就能看），且 public repo 內的 JSON 也看得到：
-
-- 檔名取不易猜的名稱，例如 `kyoto-7f3a9c2e.json`；網頁已設 `noindex`
-- 訂位編號等敏感資料可不要放進行程
-- 更保守：使用 private repo（GitHub Pages 需付費方案）或改用 Cloudflare Pages + Access，`dist/` 資料夾可直接上傳
+- `--password` 以 PBKDF2-SHA256（60 萬次）+ AES-256-GCM 加密整個頁面；沒有密碼只看得到輸入框，**加密後的檔案可以安全放 public repo 或任何免費主機**。
+- `.gitignore` 已排除 `TripPage/trips/`（明文 JSON）、`dist/`、`raw*`、`*.csv`，**明文行程不會進 repo**。Actions 也會拒絕部署未加密頁面。
+- 密碼請用 4 個以上英文單字（例如 `correct horse battery staple`）；這是靜態加密，擋不住拿到檔案後離線暴力猜密碼，所以密碼強度就是安全性。
+- 不要把密碼寫進 repo、commit 訊息或 issue。忘記密碼只能重新建置。
+- 重新建置且改密碼後，手機會自動要求輸入新密碼。
 
 ## 欄位格式
 
