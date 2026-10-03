@@ -181,7 +181,7 @@
   function updateStats() {
     const sel = items.filter(it => it.selected);
     const noLoc = sel.filter(it => !hasLoc(it)).length;
-    $('pickStats').textContent = `已選 ${sel.length} / ${items.length}` + (noLoc ? `（${noLoc} 張無定位，會依時間推算位置）` : '');
+    $('pickStats').textContent = `已選 ${sel.length} / ${items.length}` + (noLoc ? `（${noLoc} 張無定位，會沿用前一個有位置的地點）` : '');
     $('startBtn').disabled = !sel.some(hasLoc);
     $('startBtn').title = sel.some(hasLoc) ? '' : '至少要有一張已選的照片帶有位置';
     document.querySelectorAll('#grid .day').forEach(sec => {
@@ -417,24 +417,21 @@
 
   function buildPlaylist() {
     const list = sorted(items.filter(it => it.selected));
-    const known = list.map((it, i) => hasLoc(it) ? i : -1).filter(i => i >= 0);
+    // 參考點用「所有」有位置的檔案（包含沒勾選的），照時間排序
+    const known = sorted(items.filter(hasLoc));
     let k = 0;
     const days = [];
-    play = list.map((it, i) => {
+    play = list.map(it => {
       let ll, interp = false;
       if (hasLoc(it)) ll = L.latLng(it.lat, it.lng);
       else {
-        // 依時間在前後兩個有位置的點之間內插
-        while (k < known.length && known[k] < i) k++;
-        const a = known[k - 1], b = known[k];
+        // 沒有位置：沿用時間上前一個有位置的地點（通常是同一個地方拍的）；
+        // 旅程開頭之前都沒有位置時，才用後一個
+        const t = effTime(it);
+        while (k < known.length && effTime(known[k]) <= t) k++;
+        const ref = known[k - 1] || known[k];
         interp = true;
-        if (a == null) ll = L.latLng(list[b].lat, list[b].lng);
-        else if (b == null) ll = L.latLng(list[a].lat, list[a].lng);
-        else {
-          const ta = effTime(list[a]), tb = effTime(list[b]);
-          const f = tb > ta ? (effTime(it) - ta) / (tb - ta) : 0.5;
-          ll = L.latLng(list[a].lat + (list[b].lat - list[a].lat) * f, list[a].lng + (list[b].lng - list[a].lng) * f);
-        }
+        ll = L.latLng(ref.lat, ref.lng);
       }
       const day = dayKey(effTime(it));
       if (days[days.length - 1] !== day) days.push(day);
