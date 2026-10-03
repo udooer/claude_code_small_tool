@@ -12,7 +12,7 @@
 <!-- ============ 第一段：挑選照片 ============ -->
 <section id="pickView" class="view active">
   <header class="topbar">
-    <div class="brand">🗺️ 旅途回憶 <span class="step">1 / 2　挑選照片</span></div>
+    <div class="brand">🗺️ 旅途回憶 <span class="step">1 / 2　挑選照片</span> <span class="ver" title="版本">v3</span></div>
     <div class="actions">
       <label class="btn">📁 選擇資料夾<input id="dirInput" type="file" webkitdirectory multiple hidden></label>
       <label class="btn">🖼️ 選擇檔案<input id="fileInput" type="file" multiple accept="image/*,video/*,.heic,.heif,.mov" hidden></label>
@@ -54,12 +54,7 @@
   <div class="recall-top">
     <button id="backBtn" class="btn">◀ 回到挑選</button>
     <div id="tripTitle" class="trip-title"></div>
-    <select id="tileSelect" class="btn" title="地圖樣式">
-      <option value="voyager">地圖：Voyager</option>
-      <option value="osm">地圖：OpenStreetMap</option>
-      <option value="sat">地圖：衛星</option>
-      <option value="dark">地圖：深色</option>
-    </select>
+    <select id="tileSelect" class="btn" title="地圖樣式"></select>
   </div>
 
   <aside id="card" class="card">

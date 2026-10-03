@@ -5,8 +5,16 @@
 1. **挑選**：選一個照片 / 影片資料夾，工具會讀出每個檔案的拍攝時間與 GPS 位置，依天分組，讓你勾選要放進回憶的內容。
 2. **回憶**：在地圖上照時間播放。路線一段一段畫出來，照片釘在拍攝地點，旁邊顯示照片、時間、地名和你寫的回憶。
 
-不需要安裝，**直接用瀏覽器（Chrome / Edge / Safari）打開 `index.html`** 就能用。
-照片只在你自己的瀏覽器裡讀取，**不會上傳**。只有地圖圖磚和地名查詢需要網路。
+不需要安裝。照片只在你自己的瀏覽器裡讀取，**不會上傳**。只有地圖圖磚和地名查詢需要網路。
+
+## 開啟方式
+
+| 方式 | 怎麼做 | 可用的地圖 |
+|---|---|---|
+| **建議** | Windows：點兩下 **`start.cmd`**；macOS / Linux：執行 `./start.sh`。會在本機開一個小伺服器（`http://localhost:8765`）並自動打開瀏覽器，使用時不要關掉那個黑色視窗 | 全部 |
+| 直接開檔 | 用瀏覽器打開 `index.html` | 只有 Esri 的街道 / 地形 / 衛星 |
+
+> 為什麼直接開檔有些地圖不能用：CARTO 和 OpenStreetMap 會拒絕沒有來源網址的請求，畫面會出現「API KEY REQUIRED」或「Access blocked」。直接開檔時工具會自動改用 Esri 地圖，並把不能用的選項反灰。
 
 ## 使用方式
 
@@ -30,7 +38,7 @@
 | 地圖上的點 | 點一下跳到那張照片 |
 | 速度 | 慢 / 正常 / 快 |
 | 影片播完 | 勾選時等影片播完才前進，不勾選時約 8 秒後前進 |
-| 地圖樣式 | Voyager / OpenStreetMap / 衛星 / 深色 |
+| 地圖樣式 | 街道 / Voyager / OpenStreetMap / 地形 / 衛星 / 深色（會記住上次的選擇） |
 | Esc | 回到挑選 |
 
 移動距離超過 30 km（例如換城市）時，地圖會先拉遠讓你看到兩地之間的路線，再飛進目的地。換日時畫面中央會顯示「第 N 天」。
@@ -48,6 +56,8 @@
 
 ```
 TravelRecall/
+├─ start.cmd    Windows 啟動（呼叫 scripts/Serve.ps1）
+├─ start.sh     macOS / Linux 啟動（python3 http.server）
 ├─ index.html   畫面
 ├─ style.css
 ├─ media.js     讀取 EXIF / MP4 中繼資料
@@ -57,7 +67,7 @@ TravelRecall/
 
 ## 外部服務
 
-- 地圖圖磚：CARTO、OpenStreetMap、Esri World Imagery
+- 地圖圖磚：Esri（World Street Map / Topo / Imagery）、CARTO、OpenStreetMap
 - 地名搜尋 / 反查：OpenStreetMap Nominatim（每秒最多查詢一次，結果有快取）
 
 只會傳送座標或搜尋文字，不會傳送照片。

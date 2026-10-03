@@ -49,7 +49,7 @@
     if (!it.renderable && !it.thumbUrl) box.innerHTML = `<div class="ph small">${label}<br>轉換中…</div>`;
     let url;
     try { url = await Media.thumbUrl(it); }
-    catch (e) { console.warn('無法解碼', it.name, e); box.innerHTML = `<div class="ph">${label}</div>`; return; }
+    catch (e) { console.warn('無法解碼', it.name, e); box.innerHTML = `<div class="ph small">${label}<br>無法轉換</div>`; return; }
     const img = new Image();
     img.decoding = 'async';
     img.src = url;
@@ -290,7 +290,7 @@
     $('locModal').hidden = false;
     if (!locMap) {
       locMap = L.map('locMap', { worldCopyJump: true });
-      tileLayer('voyager').addTo(locMap);
+      tileLayer(savedTile()).addTo(locMap);
       locMap.on('click', e => setLocPick(e.latlng));
     }
     setTimeout(() => {
@@ -357,16 +357,39 @@
   // ================================================================
   // 第二段：地圖回憶
   // ================================================================
+  // CARTO / OpenStreetMap 會拒絕沒有來源網址的請求（直接開 index.html 時就是這樣），
+  // 所以用 file:// 開啟時預設 Esri；用 start.cmd / start.sh 開（http://localhost）時全部都能用。
+  const IS_FILE = location.protocol === 'file:';
+  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
   const TILES = {
-    voyager: ['https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', '&copy; OpenStreetMap &copy; CARTO', 20],
-    osm: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', '&copy; OpenStreetMap contributors', 19],
-    sat: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Tiles &copy; Esri', 19],
-    dark: ['https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', '&copy; OpenStreetMap &copy; CARTO', 20],
+    street: { label: '街道（Esri）', url: ESRI + 'World_Street_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 19 },
+    voyager: { label: 'Voyager（CARTO）', url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20, needsHttp: true },
+    osm: { label: 'OpenStreetMap', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; OpenStreetMap contributors', maxZoom: 19, needsHttp: true },
+    topo: { label: '地形（Esri）', url: ESRI + 'World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 19 },
+    sat: { label: '衛星（Esri）', url: ESRI + 'World_Imagery/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 19 },
+    dark: { label: '深色（CARTO）', url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20, needsHttp: true },
   };
-  function tileLayer(name) {
-    const [url, attribution, maxZoom] = TILES[name];
-    return L.tileLayer(url, { attribution, maxZoom, subdomains: 'abcd' });
+  function usable(name) { return TILES[name] && !(IS_FILE && TILES[name].needsHttp); }
+  function savedTile() {
+    let v = null;
+    try { v = localStorage.getItem('travelrecall.tiles'); } catch (e) { /* ignore */ }
+    return usable(v) ? v : (IS_FILE ? 'street' : 'voyager');
   }
+  function tileLayer(name) {
+    const t = TILES[name];
+    return L.tileLayer(t.url, { attribution: t.attribution, maxZoom: t.maxZoom, subdomains: 'abcd' });
+  }
+  (function fillTileSelect() {
+    const sel = $('tileSelect');
+    for (const [k, t] of Object.entries(TILES)) {
+      const o = document.createElement('option');
+      o.value = k;
+      o.textContent = '地圖：' + t.label + (IS_FILE && t.needsHttp ? '（需用 start 開啟）' : '');
+      o.disabled = !usable(k);
+      sel.appendChild(o);
+    }
+    sel.value = savedTile();
+  })();
 
   let map, baseLayer, routeAll, routeDone, curMarker, dotLayer;
   let play = [];        // 播放清單：{ it, ll, interp, day, dayNo }
@@ -379,11 +402,16 @@
     if (map) return;
     map = L.map('map', { zoomControl: false, worldCopyJump: true });
     L.control.zoom({ position: 'topright' }).addTo(map);
-    baseLayer = tileLayer('voyager').addTo(map);
+    baseLayer = tileLayer(savedTile()).addTo(map);
     routeAll = L.polyline([], { color: '#8a8f98', weight: 3, opacity: 0.6, dashArray: '4 8' }).addTo(map);
     routeDone = L.polyline([], { color: '#ff6a3d', weight: 5, opacity: 0.9 }).addTo(map);
     dotLayer = L.layerGroup().addTo(map);
-    $('tileSelect').onchange = e => { baseLayer.remove(); baseLayer = tileLayer(e.target.value).addTo(map); baseLayer.bringToBack(); };
+    $('tileSelect').onchange = e => {
+      baseLayer.remove();
+      baseLayer = tileLayer(e.target.value).addTo(map);
+      baseLayer.bringToBack();
+      try { localStorage.setItem('travelrecall.tiles', e.target.value); } catch (err) { /* ignore */ }
+    };
   }
 
   function buildPlaylist() {
