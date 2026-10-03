@@ -357,23 +357,24 @@
   // ================================================================
   // 第二段：地圖回憶
   // ================================================================
-  // CARTO / OpenStreetMap 會拒絕沒有來源網址的請求（直接開 index.html 時就是這樣），
-  // 所以用 file:// 開啟時預設 Esri；用 start.cmd / start.sh 開（http://localhost）時全部都能用。
+  // 地圖圖磚：預設用 Esri（免金鑰，直接開 index.html 也能用）。
+  // CARTO 現在要 API key，已移除；OpenStreetMap 會拒絕沒有來源網址的請求，
+  // 所以只有用 start.cmd / start.sh 開（http://localhost）時才能選。
   const IS_FILE = location.protocol === 'file:';
   const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
   const TILES = {
     street: { label: '街道（Esri）', url: ESRI + 'World_Street_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 19 },
-    voyager: { label: 'Voyager（CARTO）', url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20, needsHttp: true },
-    osm: { label: 'OpenStreetMap', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; OpenStreetMap contributors', maxZoom: 19, needsHttp: true },
     topo: { label: '地形（Esri）', url: ESRI + 'World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 19 },
     sat: { label: '衛星（Esri）', url: ESRI + 'World_Imagery/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 19 },
-    dark: { label: '深色（CARTO）', url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20, needsHttp: true },
+    gray: { label: '淺灰（Esri）', url: ESRI + 'Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 16 },
+    dark: { label: '深色（Esri）', url: ESRI + 'Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles &copy; Esri', maxZoom: 16 },
+    osm: { label: 'OpenStreetMap', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; OpenStreetMap contributors', maxZoom: 19, needsHttp: true },
   };
   function usable(name) { return TILES[name] && !(IS_FILE && TILES[name].needsHttp); }
   function savedTile() {
     let v = null;
     try { v = localStorage.getItem('travelrecall.tiles'); } catch (e) { /* ignore */ }
-    return usable(v) ? v : (IS_FILE ? 'street' : 'voyager');
+    return usable(v) ? v : 'street';
   }
   function tileLayer(name) {
     const t = TILES[name];
