@@ -45,8 +45,11 @@
       box.replaceChildren(v);
       return;
     }
-    const url = await Media.thumbUrl(it);
-    if (!it.renderable && !it.thumbIsExif) { box.innerHTML = `<div class="ph">${escapeHtml(it.name.split('.').pop().toUpperCase())}</div>`; return; }
+    const label = escapeHtml(it.name.split('.').pop().toUpperCase());
+    if (!it.renderable && !it.thumbUrl) box.innerHTML = `<div class="ph small">${label}<br>轉換中…</div>`;
+    let url;
+    try { url = await Media.thumbUrl(it); }
+    catch (e) { console.warn('無法解碼', it.name, e); box.innerHTML = `<div class="ph">${label}</div>`; return; }
     const img = new Image();
     img.decoding = 'async';
     img.src = url;
@@ -608,11 +611,17 @@
       img.src = Media.objectUrl(it);
       box.replaceChildren(img);
     } else {
-      // HEIC 等：用內嵌縮圖代替
+      // HEIC：先放縮圖，大圖轉換好再換上
       const holder = document.createElement('div');
       holder.className = 'thumb';
       box.replaceChildren(holder);
       fillThumb(holder, it);
+      Media.displayUrl(it).then(url => {
+        if (play[cur] !== p) return;
+        const img = new Image();
+        img.onload = () => { if (play[cur] === p) box.replaceChildren(img); };
+        img.src = url;
+      }, e => console.warn('無法解碼', it.name, e));
     }
     $('cardWhen').textContent = `第 ${p.dayNo} 天　${fmtDay(effTime(it))} ${fmtTime(effTime(it))}`;
     $('cardCaption').textContent = it.caption;

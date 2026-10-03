@@ -67,6 +67,7 @@ select.btn { appearance: none; padding-right: 14px; }
 .item .thumb { aspect-ratio: 1; background: var(--panel-2); overflow: hidden; display: grid; place-items: center; }
 .thumb img, .thumb video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
 .ph { color: var(--muted); font-size: 22px; text-align: center; }
+.ph.small { font-size: 13px; line-height: 1.4; }
 .ph.big { font-size: 48px; padding: 40px; }
 .item .tag { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: rgba(0,0,0,.65); }
 .item .check { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
@@ -142,6 +143,8 @@ select.btn { appearance: none; padding-right: 14px; }
 .pin-wrap::after { content: ""; position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%);
   border: 7px solid transparent; border-top: 9px solid #fff; }
 .pin .thumb { width: 100%; height: 100%; display: grid; place-items: center; }
+/* Leaflet 預設讓 marker 裡的 img 用原尺寸（width:auto），要蓋掉才會裁成圓形 */
+.leaflet-marker-pane .pin .thumb img, .leaflet-marker-pane .pin .thumb video { width: 100% !important; height: 100% !important; object-fit: cover; }
 
 @media (max-width: 640px) {
   .card { top: auto; bottom: 150px; left: 8px; width: calc(100vw - 16px); max-height: 42vh; }

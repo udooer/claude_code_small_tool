@@ -39,7 +39,7 @@
 
 | 類型 | 格式 | 備註 |
 |---|---|---|
-| 照片 | JPG、PNG、WebP、HEIC/HEIF、TIFF | 時間與 GPS 從 EXIF 讀取。HEIC 只有 Safari 能直接顯示，其他瀏覽器會用內嵌縮圖代替 |
+| 照片 | JPG、PNG、WebP、HEIC/HEIF | 時間與 GPS 從 EXIF 讀取。HEIC（iPhone 預設格式）在 Safari 直接顯示，Chrome / Edge 則在瀏覽器內自動轉成 JPEG 顯示（每張約 0.5–2 秒，畫面上會先顯示「轉換中…」） |
 | 影片 | MP4、MOV、M4V | 從 `moov` 讀取建立時間與 ISO 6709 位置（iPhone、多數 Android 都有）。HEVC 影片在部分瀏覽器可能無法播放 |
 
 沒有拍攝時間的檔案會用檔案修改時間，滑鼠移到縮圖上會顯示提示。
@@ -52,7 +52,7 @@ TravelRecall/
 ├─ style.css
 ├─ media.js     讀取 EXIF / MP4 中繼資料
 ├─ app.js       挑選、手動定位、行程檔、地圖播放
-└─ lib/         Leaflet 1.9.4、exifr 7.1.3（BSD-2 / MIT，內附授權）
+└─ lib/         Leaflet 1.9.4（BSD-2）、exifr 7.1.3（MIT）、heic-to 1.6.5（libheif，LGPL-3.0），各附授權檔
 ```
 
 ## 外部服務

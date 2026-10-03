@@ -179,24 +179,113 @@
     return item.url;
   }
 
-  // 優先用 EXIF 內嵌縮圖（快很多），沒有才用原圖
+  // ---------- HEIC：Chrome / Edge 不能直接顯示，用 libheif（heic-to）在瀏覽器裡解碼 ----------
+  let heicLib = null;      // 載入 lib/heic-to 的 Promise（約 3 MB，有 HEIC 才載入）
+  let nativeHeic = null;   // 瀏覽器本身能不能顯示 HEIC（Safari 可以）
+  const heicQueue = [];    // 解碼工作佇列（heic-to 只有一個 worker，一次一張）
+  let heicBusy = false;
+
+  function loadHeicLib() {
+    if (!heicLib) {
+      heicLib = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'lib/heic-to/heic-to.js';
+        s.onload = () => (window.HeicTo ? resolve(window.HeicTo) : reject(new Error('heic-to 載入失敗')));
+        s.onerror = () => reject(new Error('找不到 lib/heic-to/heic-to.js'));
+        document.head.appendChild(s);
+      });
+    }
+    return heicLib;
+  }
+
+  function canDecodeNatively(item) {
+    if (nativeHeic === null) {
+      const img = new Image();
+      img.src = objectUrl(item);
+      nativeHeic = img.decode().then(() => true, () => false);
+    }
+    return nativeHeic;
+  }
+
+  // 解碼並縮成最長邊 maxSide 的 JPEG，回傳 object URL；urgent 會插隊（播放時正在看的那張）
+  function heicToJpegUrl(item, maxSide, urgent) {
+    return new Promise((resolve, reject) => {
+      const job = { item, maxSide, resolve, reject };
+      urgent ? heicQueue.unshift(job) : heicQueue.push(job);
+      pumpHeic();
+    });
+  }
+
+  async function pumpHeic() {
+    if (heicBusy || !heicQueue.length) return;
+    heicBusy = true;
+    const job = heicQueue.shift();
+    try {
+      const heicTo = await loadHeicLib();
+      const bmp = await heicTo({ blob: job.item.file, type: 'bitmap' });
+      const k = Math.min(1, job.maxSide / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * k);
+      c.height = Math.round(bmp.height * k);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      bmp.close && bmp.close();
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
+      c.width = c.height = 1;
+      job.resolve(URL.createObjectURL(blob));
+    } catch (e) {
+      job.reject(e);
+    } finally {
+      heicBusy = false;
+      pumpHeic();
+    }
+  }
+
+  // 縮圖：一般照片優先用 EXIF 內嵌縮圖（快很多），HEIC 解碼成小張 JPEG
   async function thumbUrl(item) {
     if (item.thumbUrl) return item.thumbUrl;
-    if (item.kind === 'image') {
-      try {
-        const u = await exifr.thumbnailUrl(item.file);
-        if (u) { item.thumbUrl = u; item.thumbIsExif = true; return u; }
-      } catch (e) { /* ignore */ }
+    if (!item.thumbPromise) item.thumbPromise = (async () => {
+      if (item.kind === 'image' && item.renderable) {
+        try {
+          const u = await exifr.thumbnailUrl(item.file);
+          if (u) { item.thumbIsExif = true; return u; }
+        } catch (e) { /* ignore */ }
+      }
+      if (item.kind === 'image' && !item.renderable) {
+        if (await canDecodeNatively(item)) return objectUrl(item);
+        return heicToJpegUrl(item, 400, false);
+      }
+      return objectUrl(item);
+    })();
+    try {
+      item.thumbUrl = await item.thumbPromise;
+    } catch (e) {
+      item.thumbPromise = null;
+      throw e;
     }
-    item.thumbUrl = objectUrl(item);
     return item.thumbUrl;
   }
 
-  // EXIF 內嵌縮圖不會自動轉正，依 Orientation 補旋轉角度
+  // 大圖：HEIC 解碼成 2048px JPEG，只保留最近幾張以免吃光記憶體
+  const displayCache = new Map();
+  async function displayUrl(item) {
+    if (item.renderable || item.kind !== 'image' || await canDecodeNatively(item)) return objectUrl(item);
+    if (displayCache.has(item.id)) return displayCache.get(item.id);
+    const p = heicToJpegUrl(item, 2048, true);
+    displayCache.set(item.id, p);
+    p.catch(() => displayCache.delete(item.id));
+    while (displayCache.size > 8) {
+      const [oldId, oldP] = displayCache.entries().next().value;
+      displayCache.delete(oldId);
+      oldP.then(u => URL.revokeObjectURL(u), () => {});
+    }
+    return p;
+  }
+
+  // EXIF 內嵌縮圖不會自動轉正，依 Orientation 補旋轉角度（HEIC 解碼後已轉正）
   function thumbRotation(item) {
     if (!item.thumbIsExif) return 0;
     return ({ 3: 180, 6: 90, 8: 270 })[item.orientation] || 0;
   }
 
-  window.Media = { loadFiles, objectUrl, thumbUrl, thumbRotation, validLatLng };
+  window.Media = { loadFiles, objectUrl, thumbUrl, displayUrl, thumbRotation, validLatLng };
 })();
