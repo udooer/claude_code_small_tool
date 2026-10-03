@@ -13,13 +13,92 @@
   // 共用
   // ================================================================
   function effTime(it) {
+    if (it.time == null) return null;
     return it.time + (it.timeSource === 'video-utc' ? videoOffset * HOUR : 0);
   }
   function pad(n) { return String(n).padStart(2, '0'); }
   function dayKey(t) { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
   function fmtDay(t) { const d = new Date(t); return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}（${WEEK[d.getDay()]}）`; }
   function fmtTime(t) { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
-  function sorted(list) { return list.slice().sort((a, b) => effTime(a) - effTime(b) || a.name.localeCompare(b.name)); }
+  function sorted(list) {
+    return list.slice().sort((a, b) => {
+      const ta = effTime(a), tb = effTime(b);
+      if (ta == null || tb == null) return (ta == null) - (tb == null) || a.name.localeCompare(b.name);
+      return ta - tb || a.name.localeCompare(b.name);
+    });
+  }
+  function hasTime(it) { return it.time != null; }
+  const TIME_SOURCE = {
+    'exif': '拍攝時間（EXIF）',
+    'exif-modify': '≈ EXIF 修改時間（沒有拍攝時間，可能是後製的時間）',
+    'video-local': '影片建立時間',
+    'video-utc': '影片建立時間（UTC，可用「影片時間校正」調整）',
+    'name': '≈ 從檔名判斷',
+    'name-date': '≈ 從檔名判斷（只有日期，時間暫定中午）',
+    'seq': '≈ 依編號相鄰的照片推算',
+    'manual': '手動設定',
+    'none': '沒有拍攝時間',
+  };
+  const ESTIMATED = ['exif-modify', 'name', 'name-date', 'seq'];
+
+  // 沒有時間的檔案：找檔名編號相鄰、有時間的檔案（例如 IMG_1235 → IMG_1234），
+  // 沿用它的時間（差幾號就加幾秒，保持順序）。Live Photo 的 HEIC 和 MOV 同號，時間會一樣。
+  function inferSeqTimes() {
+    const seqOf = it => {
+      const m = it.name.replace(/\.[^.]+$/, '').match(/^(.*?)(\d{3,})$/);
+      return m ? { prefix: m[1].toLowerCase(), n: +m[2] } : null;
+    };
+    const refs = new Map();
+    for (const it of items) {
+      if (!hasTime(it) || it.timeSource === 'seq') continue;
+      const q = seqOf(it);
+      if (!q) continue;
+      if (!refs.has(q.prefix)) refs.set(q.prefix, []);
+      refs.get(q.prefix).push({ n: q.n, it });
+    }
+    for (const it of items) {
+      if (it.timeSource !== 'seq' && it.timeSource !== 'none') continue;
+      it.time = null; it.timeSource = 'none'; it.seqRef = null;
+      const q = seqOf(it);
+      const cand = q && refs.get(q.prefix);
+      if (!cand) continue;
+      let best = null;
+      for (const r of cand) if (!best || Math.abs(r.n - q.n) < Math.abs(best.n - q.n)) best = r;
+      if (!best || Math.abs(best.n - q.n) > 30) continue;
+      it.time = effTime(best.it) + (q.n - best.n) * 1000;
+      it.timeSource = 'seq';
+      it.seqRef = best.it.name;
+    }
+  }
+
+  function parseUserTime(str) {
+    const m = String(str).trim().match(/^(\d{4})\D(\d{1,2})\D(\d{1,2})(?:\D+(\d{1,2})[:：](\d{1,2})(?:[:：](\d{1,2}))?)?$/);
+    if (!m) return null;
+    return Media.wallTime(+m[1], +m[2], +m[3], m[4] ? +m[4] : 12, m[5] ? +m[5] : 0, m[6] ? +m[6] : 0);
+  }
+  function fmtInput(t) {
+    const d = new Date(t);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function editTime(it) {
+    const ref = hasTime(it) ? effTime(it) : null;
+    const v = prompt(`「${it.name}」的拍攝時間\n格式：2025-12-24 15:43（只填日期也可以）\n目前：${TIME_SOURCE[it.timeSource]}`,
+      ref != null ? fmtInput(ref) : '');
+    if (v === null) return;
+    if (v.trim() === '') {
+      // 清空 → 回到自動判斷（檔名 / 編號），都沒有就是時間不明
+      const n = Media.parseNameTime(it.name);
+      if (n) { it.time = n.time; it.timeSource = n.source; } else { it.time = null; it.timeSource = 'none'; }
+    } else {
+      const t = parseUserTime(v);
+      if (t == null) { alert('看不懂這個時間，請用 2025-12-24 15:43 的格式'); return; }
+      // 手動輸入的是當地牆上時間；影片 UTC 校正不再套用
+      it.time = t; it.timeSource = 'manual'; it.selected = true;
+    }
+    inferSeqTimes();
+    renderGrid();
+  }
   function hasLoc(it) { return it.lat != null && it.lng != null; }
   function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]); }
 
@@ -81,6 +160,8 @@
       items.push(it); idMap.set(it.id, it); known.add(it.key); added++;
     }
     if (!added && files.length) alert('沒有找到新的照片或影片。');
+    inferSeqTimes();
+    for (const it of loaded) if (it.timeSource === 'seq') it.selected = true;
     if (pendingTrip) { applyTrip(pendingTrip); pendingTrip = null; }
     renderGrid();
   }
@@ -93,8 +174,10 @@
     $('exportBtn').disabled = items.length === 0;
 
     const groups = new Map();
+    const noTime = [];
     for (const it of sorted(items)) {
       if (onlyGps && !hasLoc(it)) continue;
+      if (!hasTime(it)) { noTime.push(it); continue; }
       const k = dayKey(effTime(it));
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(it);
@@ -124,6 +207,16 @@
       sec._list = list;
       frag.appendChild(sec);
     }
+    if (noTime.length) {
+      const sec = document.createElement('section');
+      sec.className = 'day no-time';
+      sec.innerHTML = `<div class="day-head"><b>時間不明</b> <span class="muted">${noTime.length} 個檔案沒有拍攝時間，不會播放。點照片或 🕒 設定時間後，就會排進對應的那一天。</span></div>`;
+      const row = document.createElement('div');
+      row.className = 'cards';
+      for (const it of noTime) row.appendChild(makeCard(it));
+      sec.appendChild(row);
+      frag.appendChild(sec);
+    }
     grid.replaceChildren(frag);
     grid.querySelectorAll('.thumb').forEach(el => thumbObserver.observe(el));
     updateStats();
@@ -138,11 +231,12 @@
       ${it.kind === 'video' ? '<span class="tag video">▶ 影片</span>' : ''}
       <span class="check">✓</span>
       <div class="info">
-        <span class="t">${fmtTime(effTime(it))}</span>
+        <span class="t${hasTime(it) ? '' : ' missing'}">${!hasTime(it) ? '時間不明' : (ESTIMATED.includes(it.timeSource) ? '≈' : '') + fmtTime(effTime(it))}</span>
         <span class="loc"></span>
       </div>
       <div class="cap"></div>
       <div class="tools">
+        <button class="mini" data-act="time" title="設定拍攝時間">🕒</button>
         <button class="mini" data-act="cap" title="寫一句回憶">✎</button>
         <button class="mini" data-act="loc" title="設定位置">📍</button>
       </div>`;
@@ -153,6 +247,8 @@
         if (v !== null) { it.caption = v.trim(); syncCard(it); }
       } else if (act === 'loc') {
         openLocModal(it);
+      } else if (act === 'time' || !hasTime(it)) {
+        editTime(it);
       } else {
         it.selected = !it.selected;
         syncCard(it);
@@ -174,18 +270,19 @@
     loc.textContent = hasLoc(it) ? (it.locSource === 'manual' ? '📍手動' : '📍') : '無定位';
     loc.classList.toggle('missing', !hasLoc(it));
     el.querySelector('.cap').textContent = it.caption;
-    el.title = `${it.name}\n${fmtDay(effTime(it))} ${fmtTime(effTime(it))}` +
-      (it.timeSource === 'file' ? '\n（無拍攝時間，使用檔案修改時間）' : '');
+    el.title = `${it.name}\n` + (hasTime(it) ? `${fmtDay(effTime(it))} ${fmtTime(effTime(it))}\n` : '') +
+      TIME_SOURCE[it.timeSource] + (it.timeSource === 'seq' ? `（${it.seqRef}）` : '');
   }
 
   function updateStats() {
-    const sel = items.filter(it => it.selected);
+    const sel = items.filter(it => it.selected && hasTime(it));
     const noLoc = sel.filter(it => !hasLoc(it)).length;
     $('pickStats').textContent = `已選 ${sel.length} / ${items.length}` + (noLoc ? `（${noLoc} 張無定位，會沿用前一個有位置的地點）` : '');
     $('startBtn').disabled = !sel.some(hasLoc);
     $('startBtn').title = sel.some(hasLoc) ? '' : '至少要有一張已選的照片帶有位置';
     document.querySelectorAll('#grid .day').forEach(sec => {
       const l = sec._list;
+      if (!l) return;
       sec.querySelector('.day-count').textContent = `已選 ${l.filter(i => i.selected).length} / ${l.length}`;
     });
   }
@@ -225,10 +322,10 @@
   }
 
   // ---------- 工具列 ----------
-  $('selAllBtn').onclick = () => { items.forEach(it => it.selected = true); items.forEach(it => syncCard(it)); updateStats(); };
+  $('selAllBtn').onclick = () => { items.forEach(it => it.selected = hasTime(it)); items.forEach(it => syncCard(it)); updateStats(); };
   $('selNoneBtn').onclick = () => { items.forEach(it => it.selected = false); items.forEach(it => syncCard(it)); updateStats(); };
   $('onlyGpsChk').onchange = renderGrid;
-  $('videoOffset').onchange = e => { videoOffset = parseFloat(e.target.value) || 0; renderGrid(); };
+  $('videoOffset').onchange = e => { videoOffset = parseFloat(e.target.value) || 0; inferSeqTimes(); renderGrid(); };
 
   // ---------- 行程檔 匯出 / 匯入 ----------
   $('exportBtn').onclick = () => {
@@ -237,6 +334,7 @@
       items: items.map(it => ({
         key: it.key, selected: it.selected,
         caption: it.caption || undefined,
+        time: it.timeSource === 'manual' ? it.time : undefined,
         lat: it.locSource === 'manual' ? it.lat : undefined,
         lng: it.locSource === 'manual' ? it.lng : undefined,
       })),
@@ -244,7 +342,7 @@
     const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
     const a = document.createElement('a');
     const days = sorted(items);
-    a.download = `trip_${days.length ? dayKey(effTime(days[0])) : 'export'}.json`;
+    a.download = `trip_${days.length && hasTime(days[0]) ? dayKey(effTime(days[0])) : 'export'}.json`;
     a.href = URL.createObjectURL(blob);
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -274,7 +372,9 @@
       it.selected = !!r.selected;
       it.caption = r.caption || '';
       if (Media.validLatLng(r.lat, r.lng)) { it.lat = r.lat; it.lng = r.lng; it.locSource = 'manual'; }
+      if (Number.isFinite(r.time)) { it.time = r.time; it.timeSource = 'manual'; }
     }
+    inferSeqTimes();
     if (!matched) alert('行程檔裡的檔案和目前的照片對不起來（檔名或大小不同）。');
   }
 
@@ -286,7 +386,7 @@
   function openLocModal(it) {
     locItem = it;
     locPick = hasLoc(it) ? L.latLng(it.lat, it.lng) : null;
-    $('locName').textContent = `${it.name}　${fmtDay(effTime(it))} ${fmtTime(effTime(it))}`;
+    $('locName').textContent = `${it.name}　` + (hasTime(it) ? `${fmtDay(effTime(it))} ${fmtTime(effTime(it))}` : '時間不明');
     $('locModal').hidden = false;
     if (!locMap) {
       locMap = L.map('locMap', { worldCopyJump: true });
@@ -313,8 +413,8 @@
   function nearestKnown(it) {
     let best = null, bestDt = Infinity;
     for (const o of items) {
-      if (o === it || !hasLoc(o)) continue;
-      const dt = Math.abs(effTime(o) - effTime(it));
+      if (o === it || !hasLoc(o) || !hasTime(o)) continue;
+      const dt = hasTime(it) ? Math.abs(effTime(o) - effTime(it)) : 0;
       if (dt < bestDt) { bestDt = dt; best = o; }
     }
     return best ? L.latLng(best.lat, best.lng) : null;
@@ -416,9 +516,9 @@
   }
 
   function buildPlaylist() {
-    const list = sorted(items.filter(it => it.selected));
+    const list = sorted(items.filter(it => it.selected && hasTime(it)));
     // 參考點用「所有」有位置的檔案（包含沒勾選的），照時間排序
-    const known = sorted(items.filter(hasLoc));
+    const known = sorted(items.filter(it => hasLoc(it) && hasTime(it)));
     let k = 0;
     const days = [];
     play = list.map(it => {

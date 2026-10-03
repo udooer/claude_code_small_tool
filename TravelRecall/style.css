@@ -77,6 +77,8 @@ select.btn { appearance: none; padding-right: 14px; }
 .item .info { display: flex; justify-content: space-between; padding: 5px 8px 0; font-size: 12px; }
 .item .loc { color: var(--ok); }
 .item .loc.missing { color: var(--warn); }
+.item .t.missing { color: var(--warn); }
+.day.no-time .day-head b { color: var(--warn); }
 .item .cap { padding: 0 8px; font-size: 12px; color: var(--accent-2); min-height: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item .tools { display: flex; gap: 4px; padding: 4px 6px 6px; justify-content: flex-end; }
 .mini { border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 6px; cursor: pointer; padding: 1px 7px; font-size: 13px; }

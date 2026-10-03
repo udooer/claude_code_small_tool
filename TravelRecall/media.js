@@ -32,6 +32,42 @@
       Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
   }
 
+  // ---------- 時間解析 ----------
+  // EXIF / XMP 的日期（Date 或 "2025:12:24 15:43:12" / ISO 字串）→ 牆上時間 ms
+  function toTime(v) {
+    if (v instanceof Date) return isNaN(v) ? null : v.getTime();
+    if (typeof v !== 'string') return null;
+    const m = v.match(/^(\d{4})[:-](\d{2})[:-](\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    return m ? wallTime(+m[1], +m[2], +m[3], +(m[4] || 12), +(m[5] || 0), +(m[6] || 0)) : null;
+  }
+
+  function wallTime(Y, M, D, h = 12, m = 0, s = 0) {
+    if (Y < 1990 || Y > 2100 || M < 1 || M > 12 || D < 1 || D > 31 || h > 23 || m > 59 || s > 59) return null;
+    const d = new Date(Y, M - 1, D, h, m, s);
+    return d.getMonth() === M - 1 ? d.getTime() : null; // 擋掉 2/31 之類
+  }
+
+  // 從檔名猜拍攝時間，例如：
+  //   IMG_20251224_154312.jpg、PXL_20251224_064312345.jpg、20251224_154312.mp4
+  //   Screenshot_2025-12-24-15-43-12.png、Photo 2025-12-24 15 43 12.jpg
+  //   IMG-20251224-WA0001.jpg（只有日期）、1766562192000.jpg（Unix 時間戳）
+  function parseNameTime(name) {
+    const base = name.replace(/\.[^.]+$/, '');
+    let m = base.match(/(?:^|\D)(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})[ _T.-]?(\d{2})[-_.:h ]?(\d{2})[-_.:m ]?(\d{2})/);
+    if (m) {
+      const t = wallTime(+m[1], +m[2], +m[3], +m[4], +m[5], +m[6]);
+      if (t != null) return { time: t, source: 'name' };
+    }
+    m = base.match(/(?:^|\D)(1[5-9]\d{8})(\d{3})?(?:\D|$)/); // 秒或毫秒時間戳（2017–2033 年）
+    if (m) return { time: (+m[1]) * 1000, source: 'name' };
+    m = base.match(/(?:^|\D)(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})(?:\D|$)/);
+    if (m) {
+      const t = wallTime(+m[1], +m[2], +m[3]);
+      if (t != null) return { time: t, source: 'name-date' };
+    }
+    return null;
+  }
+
   // ---------- 照片：EXIF ----------
   async function readImage(file) {
     const out = {};
@@ -42,8 +78,11 @@
         reviveValues: true,
       });
       if (t) {
-        const d = t.DateTimeOriginal || t.CreateDate || t.ModifyDate;
-        if (d instanceof Date && !isNaN(d)) { out.time = d.getTime(); out.timeSource = 'exif'; }
+        // 拍攝時間：DateTimeOriginal 最準；ModifyDate 可能是後製時間，只當備案
+        const shot = [t.DateTimeOriginal, t.DateTimeDigitized, t.CreateDate, t.DateCreated].map(toTime).find(v => v != null);
+        const mod = toTime(t.ModifyDate);
+        if (shot != null) { out.time = shot; out.timeSource = 'exif'; }
+        else if (mod != null) { out.time = mod; out.timeSource = 'exif-modify'; }
         let lat = t.latitude, lng = t.longitude;
         if (!Number.isFinite(lat) && Array.isArray(t.GPSLatitude) && Array.isArray(t.GPSLongitude)) {
           const dms = a => a[0] + (a[1] || 0) / 60 + (a[2] || 0) / 3600;
@@ -136,6 +175,12 @@
     return out;
   }
 
+  function timeFields(meta, name) {
+    if (meta.time != null) return { time: meta.time, timeSource: meta.timeSource };
+    const n = parseNameTime(name);
+    return n ? { time: n.time, timeSource: n.source } : { time: null, timeSource: 'none' };
+  }
+
   // ---------- 對外 ----------
   async function loadFiles(fileList, onProgress) {
     const files = Array.from(fileList).filter(f => kindOf(f) && !f.name.startsWith('._'));
@@ -155,13 +200,13 @@
           name: file.name,
           kind,
           renderable: !UNRENDERABLE.includes(ext(file.name)),
-          time: meta.time ?? file.lastModified,
-          timeSource: meta.timeSource || 'file',
+          // 檔案修改時間常是複製 / 下載的時間，不可靠，所以不用
+          ...timeFields(meta, file.name),
           orientation: meta.orientation || 1,
           lat: meta.lat ?? null,
           lng: meta.lng ?? null,
           locSource: meta.lat != null ? 'gps' : null,
-          selected: true,
+          selected: meta.time != null || !!parseNameTime(file.name),
           caption: '',
           url: null,
           thumbUrl: null,
@@ -287,5 +332,5 @@
     return ({ 3: 180, 6: 90, 8: 270 })[item.orientation] || 0;
   }
 
-  window.Media = { loadFiles, objectUrl, thumbUrl, displayUrl, thumbRotation, validLatLng };
+  window.Media = { loadFiles, parseNameTime, wallTime, objectUrl, thumbUrl, displayUrl, thumbRotation, validLatLng };
 })();
