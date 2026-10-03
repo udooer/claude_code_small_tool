@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旅途回憶 TravelRecall</title>
+<link rel="stylesheet" href="lib/leaflet/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ 第一段：挑選照片 ============ -->
+<section id="pickView" class="view active">
+  <header class="topbar">
+    <div class="brand">🗺️ 旅途回憶 <span class="step">1 / 2　挑選照片</span></div>
+    <div class="actions">
+      <label class="btn">📁 選擇資料夾<input id="dirInput" type="file" webkitdirectory multiple hidden></label>
+      <label class="btn">🖼️ 選擇檔案<input id="fileInput" type="file" multiple accept="image/*,video/*,.heic,.heif,.mov" hidden></label>
+      <label class="btn ghost" title="載入之前匯出的行程檔（勾選、說明、手動位置）">⤒ 匯入行程檔<input id="tripInput" type="file" accept=".json,application/json" hidden></label>
+      <button id="exportBtn" class="btn ghost" disabled title="把勾選、說明、手動位置存成 JSON，下次選同一個資料夾後再匯入即可還原">⤓ 匯出行程檔</button>
+    </div>
+  </header>
+
+  <div class="toolbar" id="pickToolbar" hidden>
+    <div class="group">
+      <button id="selAllBtn" class="btn small">全選</button>
+      <button id="selNoneBtn" class="btn small">全不選</button>
+      <label class="chk"><input type="checkbox" id="onlyGpsChk"> 只顯示有定位的</label>
+      <label class="chk" title="手機影片的時間是 UTC，照片是當地時間；若影片排序錯位可在此校正">影片時間校正
+        <input type="number" id="videoOffset" value="0" step="0.5" class="num"> 小時</label>
+    </div>
+    <div class="group">
+      <span id="pickStats" class="muted"></span>
+      <button id="startBtn" class="btn primary" disabled>開始回憶 ▶</button>
+    </div>
+  </div>
+
+  <div id="progress" class="progress" hidden><div class="bar"></div><span class="label"></span></div>
+
+  <main id="dropzone" class="dropzone">
+    <div class="empty" id="emptyHint">
+      <div class="big">把旅途的照片 / 影片資料夾拖進來</div>
+      <div class="muted">或用上方按鈕選擇。檔案只在你的瀏覽器裡讀取，不會上傳。<br>
+        支援 JPG / HEIC / PNG / WebP / MP4 / MOV，會讀取拍攝時間與 GPS 位置。</div>
+    </div>
+    <div id="grid"></div>
+  </main>
+</section>
+
+<!-- ============ 第二段：地圖回憶 ============ -->
+<section id="recallView" class="view">
+  <div id="map"></div>
+
+  <div class="recall-top">
+    <button id="backBtn" class="btn">◀ 回到挑選</button>
+    <div id="tripTitle" class="trip-title"></div>
+    <select id="tileSelect" class="btn" title="地圖樣式">
+      <option value="voyager">地圖：Voyager</option>
+      <option value="osm">地圖：OpenStreetMap</option>
+      <option value="sat">地圖：衛星</option>
+      <option value="dark">地圖：深色</option>
+    </select>
+  </div>
+
+  <aside id="card" class="card">
+    <div class="media" id="cardMedia"></div>
+    <div class="meta">
+      <div class="when" id="cardWhen"></div>
+      <div class="where muted" id="cardWhere"></div>
+      <div class="caption" id="cardCaption"></div>
+    </div>
+  </aside>
+
+  <div id="dayBanner" class="day-banner"></div>
+
+  <footer class="player" id="player">
+    <div class="controls">
+      <button id="prevBtn" class="btn round" title="上一張 (←)">⏮</button>
+      <button id="playBtn" class="btn round primary" title="播放 / 暫停 (空白鍵)">▶</button>
+      <button id="nextBtn" class="btn round" title="下一張 (→)">⏭</button>
+      <select id="speedSelect" class="btn" title="播放速度">
+        <option value="0.5">慢</option>
+        <option value="1" selected>正常</option>
+        <option value="2">快</option>
+      </select>
+      <label class="chk" title="影片播完才換下一張"><input type="checkbox" id="fullVideoChk" checked> 影片播完</label>
+      <span id="counter" class="muted"></span>
+    </div>
+    <div id="strip" class="strip"></div>
+  </footer>
+</section>
+
+<!-- ============ 手動設定位置 ============ -->
+<div id="locModal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <b>設定位置</b> <span id="locName" class="muted"></span>
+      <button id="locClose" class="btn small ghost">✕</button>
+    </div>
+    <div class="modal-hint muted">在地圖上點一下放置位置，或搜尋地名。</div>
+    <div class="modal-search">
+      <input id="locSearch" type="text" placeholder="搜尋地名，例如：京都 清水寺">
+      <button id="locSearchBtn" class="btn small">搜尋</button>
+      <button id="locPrevBtn" class="btn small ghost" title="使用時間上最接近、且有位置的照片">用前一張的位置</button>
+    </div>
+    <div id="locMap"></div>
+    <div class="modal-foot">
+      <button id="locClear" class="btn small ghost">清除位置</button>
+      <button id="locOk" class="btn small primary">確定</button>
+    </div>
+  </div>
+</div>
+
+<script src="lib/leaflet/leaflet.js"></script>
+<script src="lib/exifr/exifr.umd.js"></script>
+<script src="media.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
