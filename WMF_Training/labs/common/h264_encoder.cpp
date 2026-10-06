@@ -133,7 +133,10 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
             break;
         case METransformHaveOutput:
             try {
-                while (PullOneOutput() == PullResult::StreamChanged) {}
+                // async MFT 的鐵律：只有收到 METransformHaveOutput 才能呼叫 ProcessOutput。
+                // 回 STREAM_CHANGE 時只重設 output type，然後「等下一個 HaveOutput 事件」再取，
+                // 不能馬上再呼叫一次（Intel Quick Sync 會回 E_UNEXPECTED；FFmpeg mfenc 也是這樣處理）。
+                PullOneOutput();
             } catch (const HrError& e) {
                 asyncError = e.hr();
                 lastError = e.what();
