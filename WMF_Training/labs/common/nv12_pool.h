@@ -28,13 +28,13 @@ public:
         ComPtr<IMFSample> sample; // 底層直接指向 texture（MFCreateDXGISurfaceBuffer），沒有 CPU 複製
     };
 
-    void Init(ID3D11Device* device, UINT width, UINT height, UINT count)
+    void Init(ID3D11Device* device, UINT width, UINT height, UINT count, UINT bindFlags = D3D11_BIND_RENDER_TARGET)
     {
         slots_.clear();
         next_ = 0;
         for (UINT i = 0; i < count; ++i) {
             Slot s;
-            s.texture = CreateTexture(device, width, height, DXGI_FORMAT_NV12, D3D11_BIND_RENDER_TARGET);
+            s.texture = CreateTexture(device, width, height, DXGI_FORMAT_NV12, bindFlags);
             ComPtr<IMFMediaBuffer> buf;
             CHECK_HR(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), s.texture.Get(), 0, FALSE, &buf));
             // 有些 encoder 會檢查 current length，為 0 時拒收（勘誤 M10）

@@ -18,6 +18,8 @@
 
 namespace {
 
+bool g_quiet = false; // EncoderConfig::quiet（只影響 log）
+
 void SetU4(ICodecAPI* api, const GUID& key, UINT32 value, const char* name)
 {
     VARIANT v;
@@ -25,7 +27,7 @@ void SetU4(ICodecAPI* api, const GUID& key, UINT32 value, const char* name)
     v.vt = VT_UI4;
     v.ulVal = value;
     HRESULT hr = api->SetValue(&key, &v);
-    if (FAILED(hr)) std::fprintf(stderr, "  [warn] CODECAPI %s = %u not supported (%s)\n", name, value, HrToString(hr).c_str());
+    if (FAILED(hr) && !g_quiet) std::fprintf(stderr, "  [warn] CODECAPI %s = %u not supported (%s)\n", name, value, HrToString(hr).c_str());
 }
 
 void SetBool(ICodecAPI* api, const GUID& key, bool value, const char* name)
@@ -35,7 +37,7 @@ void SetBool(ICodecAPI* api, const GUID& key, bool value, const char* name)
     v.vt = VT_BOOL;
     v.boolVal = value ? VARIANT_TRUE : VARIANT_FALSE;
     HRESULT hr = api->SetValue(&key, &v);
-    if (FAILED(hr)) std::fprintf(stderr, "  [warn] CODECAPI %s not supported (%s)\n", name, HrToString(hr).c_str());
+    if (FAILED(hr) && !g_quiet) std::fprintf(stderr, "  [warn] CODECAPI %s not supported (%s)\n", name, HrToString(hr).c_str());
 }
 
 enum class PullResult { GotOutput, NeedMoreInput, StreamChanged };
@@ -97,6 +99,7 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
     bool eventLoopRunning = false;
     bool shuttingDown = false;
     HRESULT asyncError = S_OK;
+    std::string lastError;
 
     void ArmEvent()
     {
@@ -112,6 +115,71 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
         }
     }
 
+    // 處理一個 async MFT 事件（呼叫端必須持有 mu）
+    void HandleEvent(IMFMediaEvent* ev)
+    {
+        MediaEventType type = MEUnknown;
+        HRESULT status = S_OK;
+        ev->GetType(&type);
+        ev->GetStatus(&status);
+        if (FAILED(status)) {
+            asyncError = status;
+            if (!cfg.quiet) std::fprintf(stderr, "  [event] type %lu carries failure status %s\n", (unsigned long)type, HrToString(status).c_str());
+            return;
+        }
+        switch (type) {
+        case METransformNeedInput:
+            ++needInput;
+            break;
+        case METransformHaveOutput:
+            try {
+                while (PullOneOutput() == PullResult::StreamChanged) {}
+            } catch (const HrError& e) {
+                asyncError = e.hr();
+                lastError = e.what();
+                if (!cfg.quiet) std::fprintf(stderr, "%s\n", e.what());
+            }
+            break;
+        case METransformDrainComplete:
+            drainComplete = true;
+            break;
+        case MEError:
+            asyncError = E_FAIL;
+            break;
+        default:
+            break; // METransformMarker 等
+        }
+    }
+
+    // blockingEvents 模式：在呼叫端 thread 取一個事件。noWait 時沒有事件就回傳 false。
+    bool PumpEvent(bool noWait)
+    {
+        ComPtr<IMFMediaEvent> ev;
+        HRESULT hr = events->GetEvent(noWait ? MF_EVENT_FLAG_NO_WAIT : 0, &ev);
+        if (hr == MF_E_NO_EVENTS_AVAILABLE) return false;
+        if (FAILED(hr)) {
+            asyncError = hr;
+            return false;
+        }
+        HandleEvent(ev.Get());
+        return true;
+    }
+
+    // blockingEvents 模式：等一個事件，最多 timeoutMs（避免壞掉的 encoder 讓程式永遠卡住）
+    void WaitEvent(DWORD timeoutMs = 5000)
+    {
+        DWORD start = GetTickCount();
+        while (!PumpEvent(true)) {
+            if (FAILED(asyncError)) return;
+            if (GetTickCount() - start > timeoutMs) {
+                asyncError = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+                lastError = "timed out waiting for encoder event";
+                return;
+            }
+            Sleep(1);
+        }
+    }
+
     // 在 MF 的 worker thread 上被呼叫
     void OnEvent(IMFAsyncResult* result)
     {
@@ -124,33 +192,7 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
             cv.notify_all();
             return;
         }
-        MediaEventType type = MEUnknown;
-        HRESULT status = S_OK;
-        ev->GetType(&type);
-        ev->GetStatus(&status);
-        if (FAILED(status)) asyncError = status;
-
-        switch (type) {
-        case METransformNeedInput:
-            ++needInput;
-            break;
-        case METransformHaveOutput:
-            try {
-                while (PullOneOutput() == PullResult::StreamChanged) {}
-            } catch (const HrError& e) {
-                asyncError = e.hr();
-                std::fprintf(stderr, "%s\n", e.what());
-            }
-            break;
-        case METransformDrainComplete:
-            drainComplete = true;
-            break;
-        case MEError:
-            asyncError = FAILED(status) ? status : E_FAIL;
-            break;
-        default:
-            break; // METransformMarker 等
-        }
+        HandleEvent(ev.Get());
         cv.notify_all();
         if (shuttingDown || FAILED(asyncError)) {
             eventLoopRunning = false;
@@ -217,7 +259,8 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
 
     void ThrowIfAsyncFailed()
     {
-        if (FAILED(asyncError)) throw HrError(asyncError, "async encoder event", __FILE__, __LINE__);
+        if (FAILED(asyncError))
+            throw HrError(asyncError, lastError.empty() ? "async encoder event" : "async encoder event (see first error above)", __FILE__, __LINE__);
     }
 };
 
@@ -236,6 +279,7 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
     Impl& m = *impl_;
     m.cfg = cfg;
     m.onOutput = std::move(onOutput);
+    g_quiet = cfg.quiet;
 
     // ---- 1. 找 encoder：硬體優先，沒有就退回微軟軟體 encoder ----
     if (cfg.preferHardware) {
@@ -256,7 +300,11 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
                 if (haveDevLuid && GetActivateLuid(acts[i], &l) && LuidEqual(l, devLuid)) order.insert(order.begin(), i);
                 else order.push_back(i);
             }
-            if (count > 1) {
+            if (cfg.hwIndex >= 0) { // 除錯：指定第幾個
+                order.clear();
+                if ((UINT32)cfg.hwIndex < count) order.push_back((UINT32)cfg.hwIndex);
+            }
+            if (count > 1 && !cfg.quiet) {
                 std::printf("  Hardware H.264 encoders found: %u\n", count);
                 for (UINT32 i = 0; i < count; ++i) {
                     WCHAR* n = nullptr;
@@ -286,6 +334,7 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
             for (UINT32 i = 0; i < count; ++i) acts[i]->Release(); // 陣列裡每一個都要 Release
             CoTaskMemFree(acts);                                   // 陣列本身用 CoTaskMemFree
         }
+        if (!m.mft && cfg.hwIndex >= 0) throw std::runtime_error("requested hardware encoder index not available");
         if (!m.mft) std::printf("  No hardware H.264 encoder found -> falling back to software encoder\n");
     }
     if (!m.mft) {
@@ -312,12 +361,13 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
     if (deviceManager && attrs && MFGetAttributeUINT32(attrs.Get(), MF_SA_D3D11_AWARE, FALSE)) {
         HRESULT hr = m.mft->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, (ULONG_PTR)deviceManager);
         m.d3d = SUCCEEDED(hr);
-        if (!m.d3d) std::fprintf(stderr, "  [warn] SET_D3D_MANAGER failed: %s\n", HrToString(hr).c_str());
+        if (!m.d3d && !cfg.quiet) std::fprintf(stderr, "  [warn] SET_D3D_MANAGER failed: %s\n", HrToString(hr).c_str());
     }
 
     // ---- 4. 編碼參數（部分屬性要在 SetOutputType 之前設才生效） ----
     // 用 IID_ICodecAPI 而不是 __uuidof：mingw 的標頭沒有替 ICodecAPI 宣告 uuid
-    if (SUCCEEDED(m.mft->QueryInterface(IID_ICodecAPI, reinterpret_cast<void**>(m.codecApi.ReleaseAndGetAddressOf())))) {
+    if (SUCCEEDED(m.mft->QueryInterface(IID_ICodecAPI, reinterpret_cast<void**>(m.codecApi.ReleaseAndGetAddressOf()))) &&
+        cfg.applyCodecApi) {
         SetU4(m.codecApi.Get(), CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_CBR, "RateControlMode=CBR");
         SetU4(m.codecApi.Get(), CODECAPI_AVEncCommonMeanBitRate, cfg.bitrate, "MeanBitRate");
         if (cfg.lowLatency) {
@@ -361,15 +411,17 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
     CHECK_HR(MFSetAttributeRatio(inType.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1));
     CHECK_HR(inType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
     // 告訴 encoder 輸入的色彩空間（和 VideoScaler 的輸出設定一致：BT.709 studio）
-    CHECK_HR(inType->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
-    CHECK_HR(inType->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235));
+    if (cfg.inputColorAttrs) {
+        CHECK_HR(inType->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709));
+        CHECK_HR(inType->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235));
+    }
     CHECK_HR(m.mft->SetInputType(m.inId, inType.Get(), 0));
 
     // ---- 7. 開始串流 ----
     if (m.async) {
         CHECK_HR(m.mft.As(&m.events));
         m.eventLoopRunning = true;
-        m.ArmEvent();
+        if (!cfg.blockingEvents) m.ArmEvent();
     }
     CHECK_HR(m.mft->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0));
     CHECK_HR(m.mft->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0));
@@ -378,10 +430,22 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
 void H264Encoder::Encode(IMFSample* sample)
 {
     Impl& m = *impl_;
+    if (m.async && m.cfg.blockingEvents) {
+        std::lock_guard<std::mutex> lk(m.mu);
+        while (m.needInput == 0 && SUCCEEDED(m.asyncError)) m.WaitEvent(); // 等到 NeedInput
+        m.ThrowIfAsyncFailed();
+        --m.needInput;
+        CHECK_HR(m.mft->ProcessInput(m.inId, sample, 0));
+        while (SUCCEEDED(m.asyncError) && m.PumpEvent(true)) {} // 順手把已經好的輸出拿走
+        m.ThrowIfAsyncFailed();
+        return;
+    }
     if (m.async) {
         std::unique_lock<std::mutex> lk(m.mu);
         // async：一定要等到 METransformNeedInput 才能送（否則 MF_E_NOTACCEPTING）
-        m.cv.wait(lk, [&] { return m.needInput > 0 || FAILED(m.asyncError) || !m.eventLoopRunning; });
+        if (!m.cv.wait_for(lk, std::chrono::seconds(5),
+                           [&] { return m.needInput > 0 || FAILED(m.asyncError) || !m.eventLoopRunning; }))
+            throw std::runtime_error("timed out waiting for METransformNeedInput");
         m.ThrowIfAsyncFailed();
         if (m.needInput == 0) throw std::runtime_error("encoder event loop stopped");
         --m.needInput;
@@ -408,6 +472,15 @@ void H264Encoder::Drain()
 {
     if (!impl_ || !impl_->mft) return;
     Impl& m = *impl_;
+    if (m.async && m.cfg.blockingEvents) {
+        std::lock_guard<std::mutex> lk(m.mu);
+        m.drainComplete = false;
+        CHECK_HR(m.mft->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, m.inId));
+        CHECK_HR(m.mft->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, m.inId));
+        while (!m.drainComplete && SUCCEEDED(m.asyncError)) m.WaitEvent();
+        m.ThrowIfAsyncFailed();
+        return;
+    }
     if (m.async) {
         std::unique_lock<std::mutex> lk(m.mu);
         m.drainComplete = false;
@@ -439,7 +512,7 @@ void H264Encoder::Shutdown()
         ComPtr<IMFShutdown> sd;
         if (m->async && SUCCEEDED(m->mft.As(&sd))) sd->Shutdown(); // async MFT 必須支援 IMFShutdown
     }
-    if (m->async) {
+    if (m->async && !m->cfg.blockingEvents) {
         std::unique_lock<std::mutex> lk(m->mu);
         m->cv.wait_for(lk, std::chrono::seconds(2), [&] { return !m->eventLoopRunning; });
     }

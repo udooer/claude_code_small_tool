@@ -27,6 +27,14 @@ struct EncoderConfig {
     UINT gopSize = 0;       // 0 = 讓 encoder 決定；即時串流建議 fps*2 左右
     bool lowLatency = true; // CODECAPI_AVLowLatencyMode + 不用 B-frame
     bool preferHardware = true;
+
+    // ---- 以下是除錯 / 相容性選項（codec_loopback --probe 用來找出某張顯卡的 encoder 吃哪一套設定） ----
+    int hwIndex = -1;            // >= 0：強制使用 MFTEnumEx 結果中的第幾個硬體 encoder
+    bool applyCodecApi = true;   // false：不設任何 CODECAPI（rate control / low latency / GOP 都用 encoder 預設）
+    bool inputColorAttrs = true; // false：input type 不加 MF_MT_YUV_MATRIX / MF_MT_VIDEO_NOMINAL_RANGE
+    bool blockingEvents = false; // async MFT：true = 在呼叫端 thread 用阻塞 GetEvent 處理事件（FFmpeg 的作法）
+                                 //            false = BeginGetEvent callback（在 MF worker thread 處理）
+    bool quiet = false;          // 不印 encoder 清單與 warning
 };
 
 struct EncodedFrame {
