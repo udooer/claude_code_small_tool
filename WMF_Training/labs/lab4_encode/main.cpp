@@ -74,18 +74,22 @@ static int Run(const Args& args)
     std::atomic<int64_t> bytesOut{ 0 };
 
     H264Encoder encoder;
-    encoder.Init(ec, devMgr.Get(), [&](EncodedFrame&& f) {
+    auto onOutput = [&](EncodedFrame&& f) {
         std::lock_guard<std::mutex> lk(outMu);
         std::fwrite(f.data.data(), 1, f.data.size(), out); // Annex B 直接串接就是合法的 .h264 檔
         framesOut++;
         keyframes += f.keyframe;
         bytesOut += (int64_t)f.data.size();
-    });
-    std::printf("Encoder : %s\n          hardware=%s async=%s d3d11-input=%s\n", encoder.Name().c_str(),
-                encoder.IsHardware() ? "yes" : "NO (software fallback)", encoder.IsAsync() ? "yes" : "no",
-                encoder.UsesD3D() ? "yes" : "no");
-    if (!encoder.UsesD3D())
-        std::printf("          NOTE: encoder can't read GPU textures -> each frame is read back to CPU (slow path)\n");
+    };
+    auto initEncoder = [&] {
+        encoder.Init(ec, devMgr.Get(), onOutput);
+        std::printf("Encoder : %s\n          hardware=%s async=%s d3d11-input=%s\n", encoder.Name().c_str(),
+                    encoder.IsHardware() ? "yes" : "NO (software fallback)", encoder.IsAsync() ? "yes" : "no",
+                    encoder.UsesD3D() ? "yes" : "no");
+        if (!encoder.UsesD3D())
+            std::printf("          NOTE: encoder can't read GPU textures -> each frame is read back to CPU (slow path)\n");
+    };
+    initEncoder();
     std::printf("Encoding %u frames (%u s @ %u fps) at %ux%u, %u bps -> %s\n", totalFrames, seconds, ec.fps, ec.width,
                 ec.height, ec.bitrate, outPath.c_str());
 
@@ -98,10 +102,14 @@ static int Run(const Args& args)
     }
 
     const int64_t period = QpcFrequency() / ec.fps;
-    const int64_t start = QpcNow();
+    int64_t start = QpcNow();
     int newFrames = 1, repeatedFrames = 0;
     Stat submitMs;
 
+    // 硬體 encoder 在某些機器/driver 上會在第一次 ProcessOutput 就失敗（例如舊版 Intel driver 回 E_UNEXPECTED）。
+    // 還沒產生任何輸出前失敗的話，自動改用軟體 encoder 從頭再錄一次，而不是直接結束。
+    for (int attempt = 0;; ++attempt) {
+    try {
     for (UINT i = 0; i < totalFrames; ++i) {
         // ---- 等到這一幀的時間點；期間有新畫面就更新 latest ----
         const int64_t due = start + (int64_t)i * period;
@@ -139,6 +147,19 @@ static int Run(const Args& args)
     }
 
     encoder.Drain(); // 不 drain 會少最後幾張
+    break;
+    } catch (const std::exception& e) {
+        if (attempt > 0 || !encoder.IsHardware() || framesOut.load() > 0) throw;
+        std::fprintf(stderr, "\nHardware encoder failed before producing any output:\n  %s\n", e.what());
+        std::fprintf(stderr, "-> Falling back to the software encoder and starting over. (Use --software to skip this.)\n\n");
+        ec.preferHardware = false;
+        initEncoder();
+        start = QpcNow();
+        newFrames = 1;
+        repeatedFrames = 0;
+        submitMs.Reset();
+    }
+    }
     encoder.Shutdown();
     std::fclose(out);
 

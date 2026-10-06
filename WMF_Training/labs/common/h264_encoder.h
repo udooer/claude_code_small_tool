@@ -34,6 +34,8 @@ struct EncoderConfig {
     bool inputColorAttrs = true; // false：input type 不加 MF_MT_YUV_MATRIX / MF_MT_VIDEO_NOMINAL_RANGE
     bool blockingEvents = false; // async MFT：true = 在呼叫端 thread 用阻塞 GetEvent 處理事件（FFmpeg 的作法）
                                  //            false = BeginGetEvent callback（在 MF worker thread 處理）
+    UINT h264Profile = 77;       // MF_MT_MPEG2_PROFILE：66 = Baseline、77 = Main、100 = High、0 = 不設定
+    bool setAvgBitrate = true;   // false：output type 不設 MF_MT_AVG_BITRATE
     bool quiet = false;          // 不印 encoder 清單與 warning
 };
 

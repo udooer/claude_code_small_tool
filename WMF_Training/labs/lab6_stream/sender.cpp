@@ -82,7 +82,7 @@ static int Run(Args& args)
     const UINT outputIndex = (UINT)args.GetInt("--output", 0);
     const UINT fps = (UINT)args.GetInt("--fps", 60);
     const UINT bitrate = (UINT)args.GetInt("--bitrate", 8'000'000);
-    const bool preferHw = !args.Has("--software");
+    bool preferHw = !args.Has("--software");
     const double throttleMbps = std::atof(args.Get("--throttle-mbps", "0").c_str());
     const long resArg = args.GetInt("--res", 720);
     int resIdx = resArg >= 1080 ? 0 : resArg >= 720 ? 1 : 2;
@@ -254,7 +254,17 @@ static int Run(Args& args)
             std::lock_guard<std::mutex> lk(metaMu);
             captureQpcBySampleTime[sampleTime] = capQpc;
         }
-        encoder.Encode(sample.Get());
+        try {
+            encoder.Encode(sample.Get());
+        } catch (const std::exception& e) {
+            // 硬體 encoder 在某些 driver 上無法運作（例如 E_UNEXPECTED）：改用軟體 encoder 繼續串流
+            if (!encoder.IsHardware()) throw;
+            std::fprintf(stderr, "\nHardware encoder failed: %s\n-> switching to the software encoder.\n", e.what());
+            preferHw = false;
+            configure(resIdx);
+            force = true;
+            continue;
+        }
         ++encoded;
         pending = force = false;
 

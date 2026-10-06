@@ -382,12 +382,12 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
     CHECK_HR(MFCreateMediaType(&outType));
     CHECK_HR(outType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video));
     CHECK_HR(outType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264));
-    CHECK_HR(outType->SetUINT32(MF_MT_AVG_BITRATE, cfg.bitrate));
+    if (cfg.setAvgBitrate) CHECK_HR(outType->SetUINT32(MF_MT_AVG_BITRATE, cfg.bitrate));
     CHECK_HR(MFSetAttributeSize(outType.Get(), MF_MT_FRAME_SIZE, cfg.width, cfg.height));
     CHECK_HR(MFSetAttributeRatio(outType.Get(), MF_MT_FRAME_RATE, cfg.fps, 1));
     CHECK_HR(MFSetAttributeRatio(outType.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1));
     CHECK_HR(outType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
-    CHECK_HR(outType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main));
+    if (cfg.h264Profile) CHECK_HR(outType->SetUINT32(MF_MT_MPEG2_PROFILE, cfg.h264Profile));
     CHECK_HR(m.mft->SetOutputType(m.outId, outType.Get(), 0));
 
     // ---- 6. 輸入 type：從 encoder 列出的可用 type 中找 NV12，再補上尺寸/幀率 ----

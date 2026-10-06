@@ -147,6 +147,25 @@ static EncodeResult EncodeRun(EncoderConfig ec, InputMode mode, UINT frames)
     return r;
 }
 
+// 印出每張 GPU 的名稱與 driver 版本（硬體 encoder 的問題常常是 driver 太舊）
+static void PrintAdapterDrivers()
+{
+    ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return;
+    ComPtr<IDXGIAdapter1> a;
+    for (UINT i = 0; factory->EnumAdapters1(i, &a) != DXGI_ERROR_NOT_FOUND; ++i, a.Reset()) {
+        DXGI_ADAPTER_DESC1 d;
+        a->GetDesc1(&d);
+        if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+        LARGE_INTEGER v{};
+        if (SUCCEEDED(a->CheckInterfaceSupport(__uuidof(IDXGIDevice), &v)))
+            std::printf("GPU %u: %s, driver %u.%u.%u.%u\n", i, Narrow(d.Description).c_str(), HIWORD(v.HighPart),
+                        LOWORD(v.HighPart), HIWORD(v.LowPart), LOWORD(v.LowPart));
+        else
+            std::printf("GPU %u: %s\n", i, Narrow(d.Description).c_str());
+    }
+}
+
 static int RunProbe(const EncoderConfig& base)
 {
     // 先看有幾個硬體 encoder
@@ -171,6 +190,7 @@ static int RunProbe(const EncoderConfig& base)
         std::printf("No hardware H.264 encoder on this machine.\n");
         return 0;
     }
+    PrintAdapterDrivers();
 
     std::printf("\nidx | events   | codecapi | color-attrs | input       | result\n");
     std::printf("----+----------+----------+-------------+-------------+------------------------------\n");
@@ -199,7 +219,44 @@ static int RunProbe(const EncoderConfig& base)
                                     codecapi ? "on" : "off", color ? "on" : "off", ToString(mode), res);
                         std::fflush(stdout);
                     }
-    std::printf("\n%d combination(s) worked. Please send this whole table back.\n", passes);
+
+    // ---- Phase 2：上面所有組合共用的設定（output type、解析度）也換換看 ----
+    std::printf("\nPhase 2 (encoder 0, blocking events, codecapi off, color-attrs off, sysmem):\n");
+    std::printf("size       | profile  | avg-bitrate | result\n");
+    std::printf("-----------+----------+-------------+------------------------------\n");
+    struct Size { UINT w, h; } sizes[] = { { 640, 360 }, { 1280, 720 }, { 1920, 1080 } };
+    struct Prof { UINT v; const char* name; } profs[] = { { 77, "main" }, { 66, "baseline" }, { 0, "(unset)" } };
+    for (const Size& sz : sizes)
+        for (const Prof& pf : profs)
+            for (int br = 1; br >= 0; --br) {
+                EncoderConfig ec = base;
+                ec.width = sz.w;
+                ec.height = sz.h;
+                ec.preferHardware = true;
+                ec.hwIndex = 0;
+                ec.blockingEvents = true;
+                ec.applyCodecApi = false;
+                ec.inputColorAttrs = false;
+                ec.h264Profile = pf.v;
+                ec.setAvgBitrate = br != 0;
+                ec.quiet = true;
+                EncodeResult r = EncodeRun(ec, InputMode::SystemMemory, 10);
+                bool ok = r.error.empty() && r.encoded == 10;
+                passes += ok;
+                char res[160];
+                if (ok) std::snprintf(res, sizeof(res), "OK (%d frames)", r.encoded);
+                else if (r.error.empty()) std::snprintf(res, sizeof(res), "only %d/10 frames", r.encoded);
+                else std::snprintf(res, sizeof(res), "FAIL %s", r.error.c_str());
+                char szs[16];
+                std::snprintf(szs, sizeof(szs), "%ux%u", sz.w, sz.h);
+                std::printf("%-10s | %-8s | %-11s | %s\n", szs, pf.name, br ? "set" : "unset", res);
+                std::fflush(stdout);
+            }
+
+    std::printf("\n%d combination(s) worked. Please send this whole output back.\n", passes);
+    if (passes == 0)
+        std::printf("Nothing worked: the hardware encoder driver itself is the likely problem.\n"
+                    "Cross-check with FFmpeg's MF encoder (see WALKTHROUGH) and update the Intel graphics driver.\n");
     return 0;
 }
 
