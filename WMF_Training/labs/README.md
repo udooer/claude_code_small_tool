@@ -48,6 +48,8 @@ cmake --build build --config Release
 
 Visual Studio 也可以直接「開啟資料夾」，它會自己讀 CMakeLists.txt。
 
+或直接執行 **`build.bat`**（在「x64 Native Tools Command Prompt for VS 2022」裡執行，會自動完成上面兩步）。
+
 **Debug build** 會開啟 D3D debug layer，程式結束時 Output 視窗會列出沒有釋放的 D3D 物件，很適合用來檢查洩漏。需要先到「選用功能」安裝 Graphics Tools，沒裝的話程式會自動改用不帶 debug layer 的 device。
 
 **Windows N / KN 版**：這兩個版本預設沒有 Media Foundation 編解碼器，執行時會出現 `REGDB_E_CLASSNOTREG`。請先安裝 Media Feature Pack。
