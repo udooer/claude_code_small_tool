@@ -24,6 +24,9 @@ codec_loopback.exe --hw
 
 - `portable_tests`：檢查 YUV 公式、NAL 切割、TCP 訊框、BMP 寫檔。結尾印出 `ALL PASSED` 才對。
 - `codec_loopback`：產生測試畫面 → 編碼 → 解碼，檢查張數與顏色，用來確認這台機器的 Media Foundation 環境沒問題。加上 `--hw` 會改用硬體 encoder。
+  - `--hw` 走的是和 Lab 4/6 相同的路徑：D3D11 device + device manager + GPU NV12 texture。
+  - **實機紀錄（Intel Quick Sync）**：硬體 encoder 如果只餵 CPU 記憶體、不給 D3D device（`--hw-sysmem`），Intel QSV 會在 `ProcessOutput` 回 `0x8000FFFF E_UNEXPECTED`。這是很好的教材：硬體 encoder 是為「GPU texture 進、bitstream 出」設計的，**device manager 不是可有可無的效能選項**。
+  - 混合顯卡筆電會列出多個硬體 encoder（例如 Intel + NVIDIA）。程式會優先挑和 D3D11 device **同一張 GPU** 的那一個，並標示 `<- same GPU as our D3D11 device`。
   - 印出 `REGDB_E_CLASSNOTREG` → 這是 Windows N 版，請先安裝 Media Feature Pack。
   - 預期輸出（示意）：
     ```

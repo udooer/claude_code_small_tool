@@ -86,8 +86,9 @@ cmake --build build-mingw
 | 全部 9 個執行檔能編譯（7 個 Lab + 2 個測試） | mingw-w64 13 交叉編譯，`-Wall -Wextra` | ✅ 0 warning |
 | `portable_tests` | Linux 原生 + Wine 執行 Windows 版 | ✅ 全部通過 |
 | Lab 5 NAL/AU 切割 + MF decoder 流程（STREAM_CHANGE、drain、1088 裁切、BT.709 反轉換） | Wine 9 + `--software`，輸入 ffmpeg 產生的 720p 與 1080p（含 B-frame）檔案 | ✅ 張數相等；和 ffmpeg 解出的畫面相比 PSNR 48.9 dB |
-| Lab 1~4、Lab 6、`--play`、D3D11/DXVA 路徑、硬體 encoder | 需要真實的 Windows + GPU | ⚠️ **尚未在實機執行** |
+| MSVC 建置、`portable_tests`、`codec_loopback`（軟體 encoder） | Windows 實機（ASUS，Intel GPU） | ✅ 通過 |
+| `codec_loopback --hw`（Intel Quick Sync） | Windows 實機 | 🔧 第一版只餵 CPU 記憶體 → `E_UNEXPECTED`；已改成 D3D11 + GPU texture 路徑，待重測 |
+| Lab 1~4、Lab 6、`--play`、D3D11/DXVA 路徑 | 需要真實的 Windows + GPU | ⚠️ 尚未在實機執行 |
 
 第一次在 Windows 實機跑的時候，建議照 WALKTHROUGH 的順序從 Lab 1 開始。遇到問題請記下 console 印出的 HRESULT（例如 `0x887A0004 DXGI_ERROR_UNSUPPORTED`），再對照 mentor 指南的附錄 A。
 
-MSVC 尚未實際編譯過。程式碼只用了 Windows SDK 的標準標頭和程式庫，預期可以直接編譯；如果 MSVC 報錯，多半是 `/W4` 警告或缺少某個 include，修正方式都很直接。

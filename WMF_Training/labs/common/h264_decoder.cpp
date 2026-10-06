@@ -42,7 +42,7 @@ void H264Decoder::Init(IMFDXGIDeviceManager* deviceManager, bool lowLatency)
     } catch (const std::exception&) {
         outputTypeSet_ = false;
     }
-    streamChanges_ = 0;
+    streamChanges_ = 1; // 之後真正的 STREAM_CHANGE 會從 2 開始，StreamChanges() 會扣掉這一次
 
     CHECK_HR(mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0));
     CHECK_HR(mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0));
@@ -77,7 +77,7 @@ void H264Decoder::OnStreamChange()
         dispW_ = (UINT)area.Area.cx;
         dispH_ = (UINT)area.Area.cy;
     }
-    if (codedW_)
+    if (streamChanges_ > 1) // 第 1 次是 Init 時的預設 type（尺寸只是佔位值），不印
         std::printf("  [decoder] output type: NV12 coded %ux%u, display %ux%u\n", codedW_, codedH_, dispW_, dispH_);
 }
 

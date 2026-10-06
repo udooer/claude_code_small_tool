@@ -3,12 +3,15 @@
 #include <codecapi.h>
 #include <strmif.h> // ICodecAPI
 #include <wmcodecdsp.h> // CLSID_CMSH264EncoderMFT
+#include <d3d11.h>
+#include <dxgi.h>
 
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
+#include <vector>
 
 #include "hr.h"
 #include "mf_util.h"
@@ -36,6 +39,42 @@ void SetBool(ICodecAPI* api, const GUID& key, bool value, const char* name)
 }
 
 enum class PullResult { GotOutput, NeedMoreInput, StreamChanged };
+
+// MFT_ENUM_ADAPTER_LUID（mftransform.h；舊版/mingw 標頭沒有，自己定義）
+const GUID kMftEnumAdapterLuid = { 0x1d39518c, 0xe220, 0x4da8, { 0xa0, 0x7f, 0xba, 0x17, 0x25, 0x52, 0xd6, 0xb1 } };
+
+bool LuidEqual(const LUID& a, const LUID& b) { return a.LowPart == b.LowPart && a.HighPart == b.HighPart; }
+
+// device manager 裡的 D3D11 device 在哪一張 GPU 上
+bool GetDeviceManagerLuid(IMFDXGIDeviceManager* mgr, LUID* luid)
+{
+    HANDLE h = nullptr;
+    if (FAILED(mgr->OpenDeviceHandle(&h))) return false;
+    ComPtr<ID3D11Device> dev;
+    HRESULT hr = mgr->GetVideoService(h, IID_PPV_ARGS(&dev));
+    mgr->CloseDeviceHandle(h);
+    if (FAILED(hr)) return false;
+    ComPtr<IDXGIDevice> dxgi;
+    ComPtr<IDXGIAdapter> adapter;
+    DXGI_ADAPTER_DESC desc;
+    if (FAILED(dev.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetDesc(&desc))) return false;
+    *luid = desc.AdapterLuid;
+    return true;
+}
+
+// 硬體 MFT 屬於哪一張 GPU（屬性可能是 blob 或 UINT64，兩種都試）
+bool GetActivateLuid(IMFActivate* act, LUID* luid)
+{
+    UINT32 size = 0;
+    if (SUCCEEDED(act->GetBlob(kMftEnumAdapterLuid, (UINT8*)luid, sizeof(LUID), &size)) && size == sizeof(LUID)) return true;
+    UINT64 v = 0;
+    if (SUCCEEDED(act->GetUINT64(kMftEnumAdapterLuid, &v))) {
+        luid->LowPart = (DWORD)(v & 0xFFFFFFFF);
+        luid->HighPart = (LONG)(v >> 32);
+        return true;
+    }
+    return false;
+}
 
 } // namespace
 
@@ -154,7 +193,12 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
             CHECK_HR(mft->SetOutputType(outId, t.Get(), 0));
             return PullResult::StreamChanged;
         }
-        CHECK_HR(hr);
+        if (FAILED(hr)) {
+            char what[160];
+            std::snprintf(what, sizeof(what), "ProcessOutput (output stream flags=0x%lX cbSize=%lu, %s-allocated sample)",
+                          (unsigned long)si.dwFlags, (unsigned long)si.cbSize, mftAllocates ? "MFT" : "caller");
+            throw HrError(hr, what, __FILE__, __LINE__);
+        }
         if (!out) return PullResult::GotOutput;
 
         EncodedFrame f;
@@ -202,7 +246,30 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
         HRESULT hr = MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
                                &in, &out, &acts, &count);
         if (SUCCEEDED(hr)) {
-            for (UINT32 i = 0; i < count && !m.mft; ++i) {
+            // 混合顯卡（例如 Intel 內顯 + NVIDIA 獨顯）會列出多個硬體 encoder。
+            // encoder 必須和我們的 D3D11 device 在同一張 GPU，GPU texture 才能直接餵進去。
+            LUID devLuid{};
+            bool haveDevLuid = deviceManager && GetDeviceManagerLuid(deviceManager, &devLuid);
+            std::vector<UINT32> order;
+            for (UINT32 i = 0; i < count; ++i) {
+                LUID l{};
+                if (haveDevLuid && GetActivateLuid(acts[i], &l) && LuidEqual(l, devLuid)) order.insert(order.begin(), i);
+                else order.push_back(i);
+            }
+            if (count > 1) {
+                std::printf("  Hardware H.264 encoders found: %u\n", count);
+                for (UINT32 i = 0; i < count; ++i) {
+                    WCHAR* n = nullptr;
+                    UINT32 nl = 0;
+                    acts[i]->GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, &n, &nl);
+                    LUID l{};
+                    bool same = haveDevLuid && GetActivateLuid(acts[i], &l) && LuidEqual(l, devLuid);
+                    std::printf("    [%u] %s%s\n", i, n ? Narrow(n).c_str() : "(unnamed)", same ? "  <- same GPU as our D3D11 device" : "");
+                    CoTaskMemFree(n);
+                }
+            }
+            for (UINT32 k = 0; k < order.size() && !m.mft; ++k) {
+                const UINT32 i = order[k];
                 WCHAR* fname = nullptr;
                 UINT32 len = 0;
                 acts[i]->GetAllocatedString(MFT_FRIENDLY_NAME_Attribute, &fname, &len);

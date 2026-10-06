@@ -1,8 +1,12 @@
 // codec_loopback.cpp — 不需要螢幕擷取的 encoder -> decoder 自我測試（Windows）
 //
-//   codec_loopback.exe [--frames 60] [--width 640] [--height 360] [--hw] [--out loopback.h264]
+//   codec_loopback.exe [--frames 60] [--width 640] [--height 360] [--hw] [--hw-sysmem] [--out loopback.h264]
 //
-// 產生會動的 NV12 測試畫面（CPU 記憶體）-> H264Encoder -> 寫檔 -> H264Decoder（軟體）-> 檢查：
+// 產生會動的 NV12 測試畫面 -> H264Encoder -> 寫檔 -> H264Decoder（軟體）-> 檢查：
+//   預設        ：軟體 encoder，畫面在 CPU 記憶體
+//   --hw        ：硬體 encoder，畫面上傳到 GPU NV12 texture + D3D11 device manager（和 Lab 4/6 相同的路徑）
+//   --hw-sysmem ：硬體 encoder 但直接餵 CPU 記憶體（不給 D3D device）。有些硬體 encoder（例如 Intel QSV）
+//                 在這種組態下會在 ProcessOutput 失敗，用來對照「為什麼要給 device manager」
 //   1. 解出來的張數 == 送進去的張數（encoder 與 decoder 都有 drain）
 //   2. 第一張畫面的色塊顏色正確（BT.709 studio 一路對齊）
 // 用途：在 VM / CI / 沒有螢幕的機器上確認 MF 編解碼環境與封裝類別正常。
@@ -13,10 +17,12 @@
 #include <vector>
 
 #include "cli.h"
+#include "d3d_util.h"
 #include "h264_decoder.h"
 #include "h264_encoder.h"
 #include "hr.h"
 #include "mf_util.h"
+#include "nv12_pool.h"
 #include "yuv.h"
 
 static const Rgb kBars[] = { { 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 }, { 255, 255, 255 } };
@@ -42,7 +48,9 @@ static void MakeFrame(std::vector<uint8_t>& nv12, UINT w, UINT h, UINT index)
 
 static int Run(Args& args)
 {
-    args.DeclareFlags({ "--hw" });
+    args.DeclareFlags({ "--hw", "--hw-sysmem" });
+    const bool hwSysmem = args.Has("--hw-sysmem");
+    const bool useGpu = args.Has("--hw") && !hwSysmem;
     const UINT frames = (UINT)args.GetInt("--frames", 60);
     EncoderConfig ec;
     ec.width = (UINT)args.GetInt("--width", 640) & ~1u;
@@ -50,32 +58,65 @@ static int Run(Args& args)
     ec.fps = 30;
     ec.bitrate = 2'000'000;
     ec.gopSize = 30;
-    ec.preferHardware = args.Has("--hw");
+    ec.preferHardware = args.Has("--hw") || hwSysmem;
     const std::string outPath = args.Get("--out", "loopback.h264");
 
     std::vector<uint8_t> bitstream;
     int encodedFrames = 0;
+    // --hw：和 Lab 4 一樣，建立 D3D11 device + device manager，畫面放在 GPU texture
+    D3DContext d3d;
+    ComPtr<IMFDXGIDeviceManager> devMgr;
+    Nv12SamplePool pool;
+    ComPtr<ID3D11Texture2D> upload;
+    if (useGpu) {
+        d3d = CreateD3DDefault();
+        devMgr = CreateDxgiDeviceManager(d3d.device.Get());
+        pool.Init(d3d.device.Get(), ec.width, ec.height, 8);
+        upload = CreateTexture(d3d.device.Get(), ec.width, ec.height, DXGI_FORMAT_NV12, 0, D3D11_USAGE_STAGING,
+                               D3D11_CPU_ACCESS_WRITE);
+        std::printf("D3D11 device on: %s\n", Narrow(d3d.adapterName).c_str());
+    }
+
     H264Encoder enc;
-    enc.Init(ec, nullptr, [&](EncodedFrame&& f) {
+    enc.Init(ec, devMgr.Get(), [&](EncodedFrame&& f) {
         bitstream.insert(bitstream.end(), f.data.begin(), f.data.end());
         ++encodedFrames;
     });
-    std::printf("Encoder: %s (hw=%s async=%s)\n", enc.Name().c_str(), enc.IsHardware() ? "yes" : "no", enc.IsAsync() ? "yes" : "no");
+    std::printf("Encoder: %s (hw=%s async=%s d3d11-input=%s)\n", enc.Name().c_str(), enc.IsHardware() ? "yes" : "no",
+                enc.IsAsync() ? "yes" : "no", enc.UsesD3D() ? "yes" : "no");
+    if (useGpu && !enc.UsesD3D())
+        std::printf("  NOTE: encoder rejected our D3D11 device (different GPU?) -> falling back to CPU frames\n");
 
     const DWORD size = ec.width * ec.height * 3 / 2;
     std::vector<uint8_t> nv12(size);
     for (UINT i = 0; i < frames; ++i) {
         MakeFrame(nv12, ec.width, ec.height, i);
-        ComPtr<IMFMediaBuffer> buf;
-        CHECK_HR(MFCreateMemoryBuffer(size, &buf));
-        BYTE* p = nullptr;
-        CHECK_HR(buf->Lock(&p, nullptr, nullptr));
-        std::memcpy(p, nv12.data(), size);
-        buf->Unlock();
-        CHECK_HR(buf->SetCurrentLength(size));
         ComPtr<IMFSample> s;
-        CHECK_HR(MFCreateSample(&s));
-        CHECK_HR(s->AddBuffer(buf.Get()));
+        if (useGpu && enc.UsesD3D()) {
+            // CPU 測試畫面 -> staging texture -> pool 中的 NV12 texture（實際 Lab 中這一步是 VideoProcessorBlt）
+            D3D11_MAPPED_SUBRESOURCE m;
+            CHECK_HR(d3d.context->Map(upload.Get(), 0, D3D11_MAP_WRITE, 0, &m));
+            uint8_t* dstY = (uint8_t*)m.pData;
+            uint8_t* dstUV = dstY + (size_t)m.RowPitch * ec.height;
+            for (UINT y = 0; y < ec.height; ++y) std::memcpy(dstY + (size_t)y * m.RowPitch, nv12.data() + (size_t)y * ec.width, ec.width);
+            for (UINT y = 0; y < ec.height / 2; ++y)
+                std::memcpy(dstUV + (size_t)y * m.RowPitch, nv12.data() + (size_t)ec.width * ec.height + (size_t)y * ec.width, ec.width);
+            d3d.context->Unmap(upload.Get(), 0);
+            Nv12SamplePool::Slot* slot = pool.Acquire();
+            if (!slot) throw std::runtime_error("all NV12 textures are still held by the encoder");
+            d3d.context->CopyResource(slot->texture.Get(), upload.Get());
+            s = slot->sample;
+        } else {
+            ComPtr<IMFMediaBuffer> buf;
+            CHECK_HR(MFCreateMemoryBuffer(size, &buf));
+            BYTE* p = nullptr;
+            CHECK_HR(buf->Lock(&p, nullptr, nullptr));
+            std::memcpy(p, nv12.data(), size);
+            buf->Unlock();
+            CHECK_HR(buf->SetCurrentLength(size));
+            CHECK_HR(MFCreateSample(&s));
+            CHECK_HR(s->AddBuffer(buf.Get()));
+        }
         CHECK_HR(s->SetSampleTime(MFllMulDiv(i, 10'000'000, ec.fps, 0)));
         CHECK_HR(s->SetSampleDuration(MFllMulDiv(1, 10'000'000, ec.fps, 0)));
         enc.Encode(s.Get());

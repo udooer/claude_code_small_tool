@@ -46,7 +46,7 @@ public:
     ~H264Decoder() { Shutdown(); }
 
     // MF_E_TRANSFORM_STREAM_CHANGE 發生的次數（第一次是看到 SPS，之後是解析度改變）
-    int StreamChanges() const { return streamChanges_; }
+    int StreamChanges() const { return streamChanges_ - 1; }
 
 private:
     bool PullOneOutput(const FrameFn& onFrame); // false = 需要更多輸入
