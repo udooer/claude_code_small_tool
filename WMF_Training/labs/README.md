@@ -87,7 +87,7 @@ cmake --build build-mingw
 | `portable_tests` | Linux 原生 + Wine 執行 Windows 版 | ✅ 全部通過 |
 | Lab 5 NAL/AU 切割 + MF decoder 流程（STREAM_CHANGE、drain、1088 裁切、BT.709 反轉換） | Wine 9 + `--software`，輸入 ffmpeg 產生的 720p 與 1080p（含 B-frame）檔案 | ✅ 張數相等；和 ffmpeg 解出的畫面相比 PSNR 48.9 dB |
 | MSVC 建置、`portable_tests`、`codec_loopback`（軟體 encoder） | Windows 實機（ASUS，Intel GPU） | ✅ 通過 |
-| `codec_loopback --hw`（Intel Quick Sync） | Windows 實機 | 🔧 第一版只餵 CPU 記憶體 → `E_UNEXPECTED`；已改成 D3D11 + GPU texture 路徑，待重測 |
+| `codec_loopback --hw` / `--probe`（Intel Quick Sync, UHD 620, driver 27.20.100.8681） | Windows 實機 | ✅ 修正 async STREAM_CHANGE 後全部 66 種組態通過 |
 | Lab 1~4、Lab 6、`--play`、D3D11/DXVA 路徑 | 需要真實的 Windows + GPU | ⚠️ 尚未在實機執行 |
 
 第一次在 Windows 實機跑的時候，建議照 WALKTHROUGH 的順序從 Lab 1 開始。遇到問題請記下 console 印出的 HRESULT（例如 `0x887A0004 DXGI_ERROR_UNSUPPORTED`），再對照 mentor 指南的附錄 A。
