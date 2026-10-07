@@ -35,6 +35,7 @@ CaptureStatus DesktopCapture::Acquire(UINT timeoutMs, ID3D11Texture2D* dest, int
     }
     CHECK_HR(hr);
     int64_t t = QpcNow();
+    lastInfo_ = info;
 
     // 從這裡開始，不管發生什麼都要 ReleaseFrame
     struct ReleaseGuard {
@@ -42,8 +43,11 @@ CaptureStatus DesktopCapture::Acquire(UINT timeoutMs, ID3D11Texture2D* dest, int
         ~ReleaseGuard() { d->ReleaseFrame(); }
     } guard{ dup_.Get() };
 
-    // LastPresentTime == 0：只有滑鼠位置/形狀更新，桌面影像沒變（勘誤 M3）
-    if (info.LastPresentTime.QuadPart == 0) return CaptureStatus::NoChange;
+    // LastPresentTime == 0：這個 frame 沒有新的桌面影像（勘誤 M3）
+    //   - 只有滑鼠位置/形狀更新
+    //   - 或剛 DuplicateOutput 後的第一個 frame（有些 driver 會先給一個 AccumulatedFrames=0 的空 frame）
+    // 這時 texture 內容不保證是有效畫面（可能是全黑），不能拿來用。
+    if (info.LastPresentTime.QuadPart == 0) return CaptureStatus::PointerOnly;
 
     ComPtr<ID3D11Texture2D> desktopTex;
     CHECK_HR(resource.As(&desktopTex));

@@ -14,6 +14,7 @@
 #include "desktop_capture.h"
 #include "hr.h"
 #include "mf_util.h"
+#include "timer.h"
 
 static int Run(const Args& args)
 {
@@ -52,10 +53,15 @@ static int Run(const Args& args)
     ComPtr<ID3D11Texture2D> frame = CreateTexture(d3d.device.Get(), capture.Width(), capture.Height(), capture.Format(),
                                                   D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 
+    const int64_t start = QpcNow();
     for (int attempt = 1; attempt <= maxRetries; ++attempt) {
+        int64_t t0 = QpcNow();
         CaptureStatus s = capture.Acquire(500, frame.Get());
+        double waited = QpcToMs(QpcNow() - t0);
+        const DXGI_OUTDUPL_FRAME_INFO& fi = capture.LastFrameInfo();
         if (s == CaptureStatus::NewFrame) {
-            std::printf("Got a frame on attempt %d\n", attempt);
+            std::printf("Got a frame on attempt %d after %.0f ms (Acquire returned in %.1f ms, AccumulatedFrames=%u)\n",
+                        attempt, QpcToMs(QpcNow() - start), waited, fi.AccumulatedFrames);
             if (!SaveBgraTextureAsBmp(d3d.device.Get(), d3d.context.Get(), frame.Get(), outPath)) {
                 std::fprintf(stderr, "Failed to write %s\n", outPath.c_str());
                 return 3;
@@ -72,7 +78,12 @@ static int Run(const Args& args)
             }
             continue;
         }
-        std::printf("  attempt %d: no new desktop image (timeout or pointer-only update), retrying\n", attempt);
+        if (s == CaptureStatus::NoChange)
+            std::printf("  attempt %d: DXGI_ERROR_WAIT_TIMEOUT after %.0f ms -> the desktop did not change at all\n", attempt, waited);
+        else // PointerOnly
+            std::printf("  attempt %d: frame returned in %.1f ms but LastPresentTime=0 (AccumulatedFrames=%u, "
+                        "mouse update=%s) -> no new desktop image yet, skipped\n",
+                        attempt, waited, fi.AccumulatedFrames, fi.LastMouseUpdateTime.QuadPart ? "yes" : "no");
     }
     std::fprintf(stderr, "Gave up after %d attempts without a new desktop frame. Move a window and try again.\n", maxRetries);
     return 4;

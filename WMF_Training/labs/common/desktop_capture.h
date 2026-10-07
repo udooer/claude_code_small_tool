@@ -15,9 +15,10 @@
 using Microsoft::WRL::ComPtr;
 
 enum class CaptureStatus {
-    NewFrame,   // 有新的桌面畫面，已複製到 dest
-    NoChange,   // timeout，或只有滑鼠移動（LastPresentTime == 0）
-    AccessLost, // 模式切換 / 鎖屏 / UAC：duplication 已失效，需要 Reinit()
+    NewFrame,    // 有新的桌面畫面，已複製到 dest
+    NoChange,    // DXGI_ERROR_WAIT_TIMEOUT：timeout 時間內桌面完全沒有變化
+    PointerOnly, // Acquire 成功，但 LastPresentTime == 0：只有滑鼠更新，或剛建立 duplication 時的「空」frame
+    AccessLost,  // 模式切換 / 鎖屏 / UAC：duplication 已失效，需要 Reinit()
 };
 
 class DesktopCapture {
@@ -32,6 +33,9 @@ public:
     // acquireQpc：拿到畫面的時間（QPC），延遲量測的起點
     CaptureStatus Acquire(UINT timeoutMs, ID3D11Texture2D* dest, int64_t* acquireQpc = nullptr);
 
+    // 最近一次成功 Acquire 的 frame 資訊（除錯 / 教學用）
+    const DXGI_OUTDUPL_FRAME_INFO& LastFrameInfo() const { return lastInfo_; }
+
     UINT Width() const { return desc_.ModeDesc.Width; }
     UINT Height() const { return desc_.ModeDesc.Height; }
     DXGI_FORMAT Format() const { return desc_.ModeDesc.Format; }
@@ -42,4 +46,5 @@ private:
     ComPtr<IDXGIOutput1> output_;
     ComPtr<IDXGIOutputDuplication> dup_;
     DXGI_OUTDUPL_DESC desc_{};
+    DXGI_OUTDUPL_FRAME_INFO lastInfo_{};
 };
