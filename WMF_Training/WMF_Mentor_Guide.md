@@ -322,6 +322,8 @@ SaveBmp32("capture.bmp", pixels.data(), width, height); // biHeight = -height (t
 
 ## Lab 2｜GPU 縮放
 
+> 實機問答與複習題：[labs/lab2_scale/NOTES.md](labs/lab2_scale/NOTES.md)
+
 ### 真正在考什麼
 
 1. 會用 `ID3D11VideoProcessor` 這套 API（Enumerator → Processor → InputView/OutputView → Blt）。

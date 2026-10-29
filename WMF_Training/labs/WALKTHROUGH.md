@@ -106,6 +106,8 @@ Lab 1 checklist 的 🔴 項目全部示範在 `desktop_capture.cpp` 與 `lab1_c
 
 ## Lab 2｜GPU 縮放
 
+> 實機做 Lab 2 時的問答整理（texture/view/bind flags、`VideoScaler` 的 `Init` 與 `Process`、content rect 與偶數對齊、`WaitForGpu`、DPI awareness、測試清單）：見 **[lab2_scale/NOTES.md](lab2_scale/NOTES.md)**。
+
 ### 跑起來
 
 ```bat
