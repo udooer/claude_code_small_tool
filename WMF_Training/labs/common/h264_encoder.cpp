@@ -403,10 +403,10 @@ void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceMan
         cfg.applyCodecApi) {
         SetU4(m.codecApi.Get(), CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_CBR, "RateControlMode=CBR");
         SetU4(m.codecApi.Get(), CODECAPI_AVEncCommonMeanBitRate, cfg.bitrate, "MeanBitRate");
-        if (cfg.lowLatency) {
-            SetBool(m.codecApi.Get(), CODECAPI_AVLowLatencyMode, true, "LowLatencyMode");
-            SetU4(m.codecApi.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, "BPictureCount");
-        }
+        if (cfg.lowLatency) SetBool(m.codecApi.Get(), CODECAPI_AVLowLatencyMode, true, "LowLatencyMode");
+        // B-frame 要等後面的畫面才能編，會增加延遲。low latency 模式預設關掉；也可以單獨指定（--bframes）
+        const int bFrames = cfg.bFrames >= 0 ? cfg.bFrames : (cfg.lowLatency ? 0 : -1);
+        if (bFrames >= 0) SetU4(m.codecApi.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, (UINT32)bFrames, "BPictureCount");
         if (cfg.gopSize) SetU4(m.codecApi.Get(), CODECAPI_AVEncMPVGOPSize, cfg.gopSize, "GOPSize");
     }
 

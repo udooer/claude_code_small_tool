@@ -27,7 +27,8 @@ struct EncoderConfig {
     UINT fps = 30;
     UINT bitrate = 8'000'000;
     UINT gopSize = 0;       // 0 = 讓 encoder 決定；即時串流建議 fps*2 左右
-    bool lowLatency = true; // CODECAPI_AVLowLatencyMode + 不用 B-frame
+    bool lowLatency = true; // CODECAPI_AVLowLatencyMode（bFrames 為 -1 時也順便設成不用 B-frame）
+    int bFrames = -1;       // CODECAPI_AVEncMPVDefaultBPictureCount；-1 = lowLatency 時 0、否則用 encoder 預設
     bool preferHardware = true;
 
     // ---- 以下是除錯 / 相容性選項（codec_loopback --probe 用來找出某張顯卡的 encoder 吃哪一套設定） ----
