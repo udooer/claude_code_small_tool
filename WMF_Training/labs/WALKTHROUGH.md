@@ -244,6 +244,10 @@ dda_nv12.exe --patches --vp-matrix 601 --decode-matrix 709
 
 ## Lab 4｜H.264 硬體編碼
 
+> 想系統性比較 encoder 的組態（low latency 開關、B-frame、幀率、解析度、軟硬體），可以在 `build\Release` 執行
+> `powershell -ExecutionPolicy Bypass -File ..\..\lab4_encode\encoder_bench.ps1`（先加 `-Quick` 試跑）。
+> 它會重複執行 `dda_encode.exe`，產生 `summary.txt` 報告。
+
 ### 跑起來
 
 ```bat

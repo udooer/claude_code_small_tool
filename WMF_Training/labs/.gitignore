@@ -1,3 +1,4 @@
 build*/
 *.bmp
 *.h264
+bench_*/

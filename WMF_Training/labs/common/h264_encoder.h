@@ -48,6 +48,8 @@ struct EncoderTiming {
     Stat processInput;     // ProcessInput 本身（sync 時也包含取出輸出）
     Stat inputToNeedInput; // async：ProcessInput 回來之後，到 encoder 再要下一張的間隔
     Stat inputToOutput;    // 送進去到拿到同一張的輸出（以 sample time 對應）= encoder 延遲
+    std::vector<double> inputDoneAtMs; // 每次 ProcessInput 回來的時刻（從 Init 起算，依送入順序）
+    std::vector<double> outputAtMs;    // 每次拿到輸出的時刻（從 Init 起算，依輸出順序）
 };
 
 struct EncodedFrame {

@@ -2,6 +2,7 @@
 //
 //   dda_encode.exe [--output N] [--width 1280] [--height 720] [--fps 30] [--seconds 5]
 //                  [--bitrate 8000000] [--gop 60] [--out output.h264] [--software] [--timer-1ms] [--sync-gpu] [--no-low-latency] [--bframes N]
+//                  [--frame-log frames.csv]   每幀的量測值寫成 CSV（給 encoder_bench.ps1 分析）
 //
 // 學習重點：
 //   1. MFTEnumEx 列舉硬體 encoder，沒有就 fallback 到軟體，印出實際用的是哪一個
@@ -15,6 +16,8 @@
 #include <atomic>
 #include <cstdio>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "cli.h"
 #include "d3d_util.h"
@@ -121,7 +124,9 @@ static int Run(const Args& args)
     const int64_t period = QpcFrequency() / ec.fps;
     int64_t start = QpcNow();
     int newFrames = 0, repeatedFrames = 0; // 第 0 幀在迴圈裡會以 gotNew 計入，這裡不能先算
-    Stat submitMs, gpuWaitMs;
+    Stat submitMs, gpuWaitMs, lateMs; // lateMs：實際送進 encoder 的時刻比預定時刻晚了多久（跟不上時會一直變大）
+    std::vector<double> submitEndMs;   // 每幀 Encode() 回來的時刻（從 start 起算）
+    std::vector<char> newFlags;        // 每幀是不是新的桌面畫面
     double wallMs = 0;
 
     // 硬體 encoder 在某些機器/driver 上會在第一次 ProcessOutput 就失敗（例如舊版 Intel driver 回 E_UNEXPECTED）。
@@ -144,6 +149,7 @@ static int Run(const Args& args)
             if (QpcNow() >= due) break;
         }
         gotNew ? ++newFrames : ++repeatedFrames;
+        newFlags.push_back(gotNew ? 1 : 0);
 
         // ---- 縮放 + 轉 NV12 到 pool 中一張 encoder 沒在用的 texture ----
         Nv12SamplePool::Slot* slot = pool.Acquire();
@@ -160,8 +166,11 @@ static int Run(const Args& args)
         CHECK_HR(sample->SetSampleDuration(MFllMulDiv(1, 10'000'000, ec.fps, 0)));
 
         int64_t t0 = QpcNow();
+        lateMs.Add(QpcToMs(t0 - due));
         encoder.Encode(sample.Get());
-        submitMs.Add(QpcToMs(QpcNow() - t0));
+        const int64_t t1 = QpcNow();
+        submitMs.Add(QpcToMs(t1 - t0));
+        submitEndMs.push_back(QpcToMs(t1 - start));
         if ((i + 1) % ec.fps == 0) std::printf("  %u / %u frames submitted, %d encoded\n", i + 1, totalFrames, framesOut.load());
     }
 
@@ -179,9 +188,15 @@ static int Run(const Args& args)
         repeatedFrames = 0;
         submitMs.Reset();
         gpuWaitMs.Reset();
+        lateMs.Reset();
+        submitEndMs.clear();
+        newFlags.clear();
     }
     }
-    const EncoderTiming et = encoder.Timing(); // 必須在 Shutdown 之前取：Shutdown 會釋放 encoder 內部狀態
+    // 以下都必須在 Shutdown 之前取：Shutdown 會釋放 encoder 內部狀態
+    const EncoderTiming et = encoder.Timing();
+    const std::string encName = encoder.Name();
+    const bool encHw = encoder.IsHardware(), encAsync = encoder.IsAsync(), encD3d = encoder.UsesD3D();
     encoder.Shutdown();
     std::fclose(out);
 
@@ -206,6 +221,66 @@ static int Run(const Args& args)
     line("ProcessInput", et.processInput);
     line("input -> next NeedInput", et.inputToNeedInput);
     line("input -> output (latency)", et.inputToOutput);
+    // ---- 每幀明細（--frame-log）----
+    const std::string frameLog = args.Get("--frame-log", "");
+    if (!frameLog.empty()) {
+        if (FILE* f = std::fopen(frameLog.c_str(), "w")) {
+            // lat_ms / output_at_ms 依「輸出順序」排列；沒有 B-frame 時就等於幀的順序
+            std::fprintf(f, "frame,new,late_ms,encode_ms,wait_ms,process_input_ms,latency_ms,submit_end_ms,output_at_ms\n");
+            auto at = [](const std::vector<double>& v, size_t i) { return i < v.size() ? v[i] : -1.0; };
+            for (size_t i = 0; i < (size_t)totalFrames; ++i)
+                std::fprintf(f, "%zu,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", i, i < newFlags.size() ? newFlags[i] : -1,
+                             at(lateMs.values, i), at(submitMs.values, i), at(et.waitInput.values, i),
+                             at(et.processInput.values, i), at(et.inputToOutput.values, i), at(submitEndMs, i),
+                             at(et.outputAtMs, i));
+            std::fclose(f);
+            std::printf("  frame log   : %s\n", frameLog.c_str());
+        } else {
+            std::fprintf(stderr, "Cannot write %s\n", frameLog.c_str());
+        }
+    }
+
+    // ---- 機器可讀的一行摘要（encoder_bench.ps1 解析這一行）----
+    std::string r = "RESULT";
+    auto kv = [&](const char* k, const std::string& v) { r += std::string(" ") + k + "=" + v; };
+    auto num = [](double v) { char b[32]; std::snprintf(b, sizeof(b), "%.3f", v); return std::string(b); };
+    auto stat = [&](const char* k, const Stat& st) {
+        if (!st.count) return;
+        const std::string p = k;
+        kv((p + "_avg").c_str(), num(st.Avg()));
+        kv((p + "_min").c_str(), num(st.min));
+        kv((p + "_p50").c_str(), num(st.Percentile(50)));
+        kv((p + "_p95").c_str(), num(st.Percentile(95)));
+        kv((p + "_max").c_str(), num(st.max));
+    };
+    kv("hw", encHw ? "1" : "0");
+    kv("async", encAsync ? "1" : "0");
+    kv("d3d", encD3d ? "1" : "0");
+    kv("ll", ec.lowLatency ? "1" : "0");
+    kv("bframes", std::to_string(ec.bFrames));
+    kv("sync_gpu", syncGpu ? "1" : "0");
+    kv("timer1ms", timerPeriod.on ? "1" : "0");
+    kv("width", std::to_string(ec.width));
+    kv("height", std::to_string(ec.height));
+    kv("fps", std::to_string(ec.fps));
+    kv("seconds", std::to_string(seconds));
+    kv("frames_in", std::to_string(totalFrames));
+    kv("frames_out", std::to_string(framesOut.load()));
+    kv("keyframes", std::to_string(keyframes.load()));
+    kv("new", std::to_string(newFrames));
+    kv("repeated", std::to_string(repeatedFrames));
+    kv("wall_ms", num(wallMs));
+    kv("bytes", std::to_string((long long)bytesOut.load()));
+    kv("mbps", num(actualBps / 1e6));
+    stat("encode", submitMs);
+    stat("late", lateMs);
+    stat("gpuwait", gpuWaitMs);
+    stat("wait", et.waitInput);
+    stat("pi", et.processInput);
+    stat("i2n", et.inputToNeedInput);
+    stat("lat", et.inputToOutput);
+    std::printf("%s encoder=\"%s\"\n", r.c_str(), encName.c_str());
+
     std::printf("\nVerify with:\n  ffprobe -v error -count_frames -select_streams v:0 -show_entries "
                 "stream=codec_name,profile,width,height,nb_read_frames,has_b_frames -of default=nw=1 %s\n"
                 "  ffplay -framerate %u %s     (raw .h264 has no timestamps; ffmpeg assumes 25 fps otherwise)\n",

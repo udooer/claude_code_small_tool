@@ -104,12 +104,14 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
 
     // 計時（受 mu 保護）
     EncoderTiming timing;
+    int64_t timingBase = QpcNow(); // 絕對時刻的起點
     int64_t lastInputDone = 0;          // 上一次 ProcessInput 回來的 QPC；收到 NeedInput 後清 0
     std::map<int64_t, int64_t> inputAt; // sample time -> 送進去的 QPC
 
     void RecordInput(IMFSample* sample, int64_t before, int64_t after)
     {
         timing.processInput.Add(QpcToMs(after - before));
+        timing.inputDoneAtMs.push_back(QpcToMs(after - timingBase));
         lastInputDone = after;
         LONGLONG t = 0;
         if (SUCCEEDED(sample->GetSampleTime(&t))) inputAt[t] = before;
@@ -268,7 +270,9 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
         out->GetSampleTime(&f.sampleTime);
         auto it = inputAt.find(f.sampleTime);
         if (it != inputAt.end()) {
-            timing.inputToOutput.Add(QpcToMs(QpcNow() - it->second));
+            const int64_t now = QpcNow();
+            timing.inputToOutput.Add(QpcToMs(now - it->second));
+            timing.outputAtMs.push_back(QpcToMs(now - timingBase));
             inputAt.erase(it);
         }
         f.keyframe = MFGetAttributeUINT32(out.Get(), MFSampleExtension_CleanPoint, FALSE) != 0;
@@ -506,7 +510,9 @@ void H264Encoder::Encode(IMFSample* sample)
     }
     CHECK_HR(hr);
     while (m.PullOneOutput() != PullResult::NeedMoreInput) {}
-    m.timing.processInput.Add(QpcToMs(QpcNow() - t0));
+    const int64_t done = QpcNow();
+    m.timing.processInput.Add(QpcToMs(done - t0));
+    m.timing.inputDoneAtMs.push_back(QpcToMs(done - m.timingBase));
 }
 
 void H264Encoder::ForceKeyFrame()
