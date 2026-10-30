@@ -1,7 +1,7 @@
 // Lab 4 — H.264 硬體編碼
 //
 //   dda_encode.exe [--output N] [--width 1280] [--height 720] [--fps 30] [--seconds 5]
-//                  [--bitrate 8000000] [--gop 60] [--out output.h264] [--software]
+//                  [--bitrate 8000000] [--gop 60] [--out output.h264] [--software] [--timer-1ms]
 //
 // 學習重點：
 //   1. MFTEnumEx 列舉硬體 encoder，沒有就 fallback 到軟體，印出實際用的是哪一個
@@ -9,6 +9,9 @@
 //   3. 時間戳：100ns 單位，i * 10,000,000 / fps（先乘後除，不累積誤差）
 //   4. 恆定幀率：DDA 畫面沒變時不給 frame，要重送上一張，才會剛好 fps*seconds 張
 //   5. 送進 async encoder 的 texture 要用 pool，不能每幀覆寫同一張
+#include <windows.h>
+#include <mmsystem.h> // timeBeginPeriod
+
 #include <atomic>
 #include <cstdio>
 #include <mutex>
@@ -37,6 +40,15 @@ static int Run(const Args& args)
     const UINT seconds = (UINT)args.GetInt("--seconds", 5);
     const UINT totalFrames = ec.fps * seconds;
     const std::string outPath = args.Get("--out", "output.h264");
+
+    // 除錯用：把 Windows 計時器解析度從預設的 15.6 ms 調成 1 ms。
+    // 如果 Encode() 的時間因此大幅下降，代表某處（例如 driver 內部）用 Sleep/計時器在等待。
+    struct TimerPeriod {
+        bool on;
+        explicit TimerPeriod(bool enable) : on(enable && timeBeginPeriod(1) == TIMERR_NOERROR) {}
+        ~TimerPeriod() { if (on) timeEndPeriod(1); }
+    } timerPeriod(args.Has("--timer-1ms"));
+    if (timerPeriod.on) std::printf("Timer resolution: 1 ms (timeBeginPeriod)\n");
 
     D3DContext d3d = CreateD3DForOutput(outputIndex);
     ComPtr<IMFDXGIDeviceManager> devMgr = CreateDxgiDeviceManager(d3d.device.Get());
@@ -103,7 +115,7 @@ static int Run(const Args& args)
 
     const int64_t period = QpcFrequency() / ec.fps;
     int64_t start = QpcNow();
-    int newFrames = 1, repeatedFrames = 0;
+    int newFrames = 0, repeatedFrames = 0; // 第 0 幀在迴圈裡會以 gotNew 計入，這裡不能先算
     Stat submitMs;
 
     // 硬體 encoder 在某些機器/driver 上會在第一次 ProcessOutput 就失敗（例如舊版 Intel driver 回 E_UNEXPECTED）。
@@ -155,7 +167,7 @@ static int Run(const Args& args)
         ec.preferHardware = false;
         initEncoder();
         start = QpcNow();
-        newFrames = 1;
+        newFrames = 0;
         repeatedFrames = 0;
         submitMs.Reset();
     }

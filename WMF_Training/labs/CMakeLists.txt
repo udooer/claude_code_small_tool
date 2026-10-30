@@ -43,6 +43,7 @@ add_executable(dda_capture lab1_capture/main.cpp)
 add_executable(dda_scale   lab2_scale/main.cpp)
 add_executable(dda_nv12    lab3_nv12/main.cpp)
 add_executable(dda_encode  lab4_encode/main.cpp)
+target_link_libraries(dda_encode PRIVATE winmm) # timeBeginPeriod（--timer-1ms）
 add_executable(h264_decode lab5_decode/main.cpp)
 add_executable(sender      lab6_stream/sender.cpp)
 add_executable(receiver    lab6_stream/receiver.cpp)
