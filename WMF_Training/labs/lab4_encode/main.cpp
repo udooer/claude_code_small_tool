@@ -1,7 +1,7 @@
 // Lab 4 — H.264 硬體編碼
 //
 //   dda_encode.exe [--output N] [--width 1280] [--height 720] [--fps 30] [--seconds 5]
-//                  [--bitrate 8000000] [--gop 60] [--out output.h264] [--software] [--timer-1ms]
+//                  [--bitrate 8000000] [--gop 60] [--out output.h264] [--software] [--timer-1ms] [--sync-gpu]
 //
 // 學習重點：
 //   1. MFTEnumEx 列舉硬體 encoder，沒有就 fallback 到軟體，印出實際用的是哪一個
@@ -49,6 +49,8 @@ static int Run(const Args& args)
         ~TimerPeriod() { if (on) timeEndPeriod(1); }
     } timerPeriod(args.Has("--timer-1ms"));
     if (timerPeriod.on) std::printf("Timer resolution: 1 ms (timeBeginPeriod)\n");
+    // 除錯用：送進 encoder 前先等 GPU 把縮放做完。用來分辨 ProcessInput 的等待是不是在等我們的 GPU 工作。
+    const bool syncGpu = args.Has("--sync-gpu");
 
     D3DContext d3d = CreateD3DForOutput(outputIndex);
     ComPtr<IMFDXGIDeviceManager> devMgr = CreateDxgiDeviceManager(d3d.device.Get());
@@ -116,7 +118,7 @@ static int Run(const Args& args)
     const int64_t period = QpcFrequency() / ec.fps;
     int64_t start = QpcNow();
     int newFrames = 0, repeatedFrames = 0; // 第 0 幀在迴圈裡會以 gotNew 計入，這裡不能先算
-    Stat submitMs;
+    Stat submitMs, gpuWaitMs;
 
     // 硬體 encoder 在某些機器/driver 上會在第一次 ProcessOutput 就失敗（例如舊版 Intel driver 回 E_UNEXPECTED）。
     // 還沒產生任何輸出前失敗的話，自動改用軟體 encoder 從頭再錄一次，而不是直接結束。
@@ -143,6 +145,7 @@ static int Run(const Args& args)
         Nv12SamplePool::Slot* slot = pool.Acquire();
         if (!slot) throw std::runtime_error("all NV12 textures are still held by the encoder");
         scaler.Process(latest.Get(), 0, slot->texture.Get());
+        if (syncGpu) gpuWaitMs.Add(WaitForGpu(d3d.device.Get(), d3d.context.Get()));
 
         ComPtr<IMFSample> sample = slot->sample;
         if (!encoder.UsesD3D())
@@ -170,6 +173,7 @@ static int Run(const Args& args)
         newFrames = 0;
         repeatedFrames = 0;
         submitMs.Reset();
+        gpuWaitMs.Reset();
     }
     }
     const EncoderTiming et = encoder.Timing(); // 必須在 Shutdown 之前取：Shutdown 會釋放 encoder 內部狀態
@@ -184,6 +188,8 @@ static int Run(const Args& args)
     std::printf("  file size   : %lld bytes, average %.2f Mbps (target %.2f Mbps)\n", (long long)bytesOut.load(),
                 actualBps / 1e6, ec.bitrate / 1e6);
     std::printf("  Encode() call time: avg %.2f ms, max %.2f ms\n", submitMs.Avg(), submitMs.max);
+    if (gpuWaitMs.count)
+        std::printf("  GPU wait before Encode (--sync-gpu): avg %.2f ms, max %.2f ms\n", gpuWaitMs.Avg(), gpuWaitMs.max);
     auto line = [](const char* name, const Stat& s) {
         if (s.count) std::printf("    %-24s avg %6.2f ms, max %6.2f ms  (n=%d)\n", name, s.Avg(), s.max, s.count);
     };
