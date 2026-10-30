@@ -120,6 +120,7 @@ static int Run(const Args& args)
     int64_t start = QpcNow();
     int newFrames = 0, repeatedFrames = 0; // 第 0 幀在迴圈裡會以 gotNew 計入，這裡不能先算
     Stat submitMs, gpuWaitMs;
+    double wallMs = 0;
 
     // 硬體 encoder 在某些機器/driver 上會在第一次 ProcessOutput 就失敗（例如舊版 Intel driver 回 E_UNEXPECTED）。
     // 還沒產生任何輸出前失敗的話，自動改用軟體 encoder 從頭再錄一次，而不是直接結束。
@@ -163,6 +164,7 @@ static int Run(const Args& args)
     }
 
     encoder.Drain(); // 不 drain 會少最後幾張
+    wallMs = QpcToMs(QpcNow() - start);
     break;
     } catch (const std::exception& e) {
         if (attempt > 0 || !encoder.IsHardware() || framesOut.load() > 0) throw;
@@ -186,6 +188,9 @@ static int Run(const Args& args)
     std::printf("  frames in   : %u  (new desktop images %d, repeated %d)\n", totalFrames, newFrames, repeatedFrames);
     std::printf("  frames out  : %d  (keyframes %d)%s\n", framesOut.load(), keyframes.load(),
                 framesOut.load() == (int)totalFrames ? "" : "   <-- should equal frames in!");
+    // 跟得上的話，實際花的時間 ≈ 影片長度。明顯比較久代表每幀的處理時間超過 1/fps。
+    std::printf("  wall time   : %.2f s for %u s of video (%.0f frames/s actually processed)%s\n", wallMs / 1000,
+                seconds, totalFrames * 1000.0 / wallMs, wallMs > seconds * 1000.0 * 1.05 ? "   <-- could not keep up" : "");
     std::printf("  file size   : %lld bytes, average %.2f Mbps (target %.2f Mbps)\n", (long long)bytesOut.load(),
                 actualBps / 1e6, ec.bitrate / 1e6);
     std::printf("  Encode() call time: avg %.2f ms, max %.2f ms\n", submitMs.Avg(), submitMs.max);
