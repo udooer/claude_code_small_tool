@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "timer.h"
+
 using Microsoft::WRL::ComPtr;
 
 struct EncoderConfig {
@@ -37,6 +39,14 @@ struct EncoderConfig {
     UINT h264Profile = 77;       // MF_MT_MPEG2_PROFILE：66 = Baseline、77 = Main、100 = High、0 = 不設定
     bool setAvgBitrate = true;   // false：output type 不設 MF_MT_AVG_BITRATE
     bool quiet = false;          // 不印 encoder 清單與 warning
+};
+
+// Encode() 的時間拆解（毫秒），用來找出時間花在哪一段
+struct EncoderTiming {
+    Stat waitInput;        // async：等 METransformNeedInput 的時間
+    Stat processInput;     // ProcessInput 本身（sync 時也包含取出輸出）
+    Stat inputToNeedInput; // async：ProcessInput 回來之後，到 encoder 再要下一張的間隔
+    Stat inputToOutput;    // 送進去到拿到同一張的輸出（以 sample time 對應）= encoder 延遲
 };
 
 struct EncodedFrame {
@@ -75,6 +85,7 @@ public:
     bool IsAsync() const;
     bool UsesD3D() const; // false 時 MF 會把 GPU texture 讀回 CPU 給 encoder（隱形 readback）
     std::string Name() const;
+    EncoderTiming Timing() const;
 
     struct Impl;
 

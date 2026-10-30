@@ -183,6 +183,15 @@ static int Run(const Args& args)
     std::printf("  file size   : %lld bytes, average %.2f Mbps (target %.2f Mbps)\n", (long long)bytesOut.load(),
                 actualBps / 1e6, ec.bitrate / 1e6);
     std::printf("  Encode() call time: avg %.2f ms, max %.2f ms\n", submitMs.Avg(), submitMs.max);
+    const EncoderTiming et = encoder.Timing();
+    auto line = [](const char* name, const Stat& s) {
+        if (s.count) std::printf("    %-24s avg %6.2f ms, max %6.2f ms  (n=%d)\n", name, s.Avg(), s.max, s.count);
+    };
+    std::printf("  Encoder timing breakdown:\n");
+    line("wait for NeedInput", et.waitInput);
+    line("ProcessInput", et.processInput);
+    line("input -> next NeedInput", et.inputToNeedInput);
+    line("input -> output (latency)", et.inputToOutput);
     std::printf("\nVerify with:\n  ffprobe -v error -count_frames -select_streams v:0 -show_entries "
                 "stream=codec_name,profile,width,height,nb_read_frames,has_b_frames -of default=nw=1 %s\n"
                 "  ffplay -framerate %u %s     (raw .h264 has no timestamps; ffmpeg assumes 25 fps otherwise)\n",

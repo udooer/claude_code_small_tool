@@ -10,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -101,6 +102,19 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
     HRESULT asyncError = S_OK;
     std::string lastError;
 
+    // 計時（受 mu 保護）
+    EncoderTiming timing;
+    int64_t lastInputDone = 0;          // 上一次 ProcessInput 回來的 QPC；收到 NeedInput 後清 0
+    std::map<int64_t, int64_t> inputAt; // sample time -> 送進去的 QPC
+
+    void RecordInput(IMFSample* sample, int64_t before, int64_t after)
+    {
+        timing.processInput.Add(QpcToMs(after - before));
+        lastInputDone = after;
+        LONGLONG t = 0;
+        if (SUCCEEDED(sample->GetSampleTime(&t))) inputAt[t] = before;
+    }
+
     void ArmEvent()
     {
         auto self = shared_from_this(); // callback 持有 Impl，避免 Impl 先被釋放
@@ -129,6 +143,10 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
         }
         switch (type) {
         case METransformNeedInput:
+            if (lastInputDone) {
+                timing.inputToNeedInput.Add(QpcToMs(QpcNow() - lastInputDone));
+                lastInputDone = 0;
+            }
             ++needInput;
             break;
         case METransformHaveOutput:
@@ -248,6 +266,11 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
 
         EncodedFrame f;
         out->GetSampleTime(&f.sampleTime);
+        auto it = inputAt.find(f.sampleTime);
+        if (it != inputAt.end()) {
+            timing.inputToOutput.Add(QpcToMs(QpcNow() - it->second));
+            inputAt.erase(it);
+        }
         f.keyframe = MFGetAttributeUINT32(out.Get(), MFSampleExtension_CleanPoint, FALSE) != 0;
         ComPtr<IMFMediaBuffer> buf;
         CHECK_HR(out->ConvertToContiguousBuffer(&buf));
@@ -274,6 +297,13 @@ bool H264Encoder::IsHardware() const { return impl_ && impl_->hardware; }
 bool H264Encoder::IsAsync() const { return impl_ && impl_->async; }
 bool H264Encoder::UsesD3D() const { return impl_ && impl_->d3d; }
 std::string H264Encoder::Name() const { return impl_ ? impl_->name : ""; }
+
+EncoderTiming H264Encoder::Timing() const
+{
+    if (!impl_) return {};
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    return impl_->timing;
+}
 
 void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceManager, OutputFn onOutput)
 {
@@ -435,16 +465,21 @@ void H264Encoder::Encode(IMFSample* sample)
     Impl& m = *impl_;
     if (m.async && m.cfg.blockingEvents) {
         std::lock_guard<std::mutex> lk(m.mu);
+        const int64_t t0 = QpcNow();
         while (m.needInput == 0 && SUCCEEDED(m.asyncError)) m.WaitEvent(); // 等到 NeedInput
         m.ThrowIfAsyncFailed();
         --m.needInput;
+        const int64_t t1 = QpcNow();
+        m.timing.waitInput.Add(QpcToMs(t1 - t0));
         CHECK_HR(m.mft->ProcessInput(m.inId, sample, 0));
+        m.RecordInput(sample, t1, QpcNow());
         while (SUCCEEDED(m.asyncError) && m.PumpEvent(true)) {} // 順手把已經好的輸出拿走
         m.ThrowIfAsyncFailed();
         return;
     }
     if (m.async) {
         std::unique_lock<std::mutex> lk(m.mu);
+        const int64_t t0 = QpcNow();
         // async：一定要等到 METransformNeedInput 才能送（否則 MF_E_NOTACCEPTING）
         if (!m.cv.wait_for(lk, std::chrono::seconds(5),
                            [&] { return m.needInput > 0 || FAILED(m.asyncError) || !m.eventLoopRunning; }))
@@ -452,10 +487,18 @@ void H264Encoder::Encode(IMFSample* sample)
         m.ThrowIfAsyncFailed();
         if (m.needInput == 0) throw std::runtime_error("encoder event loop stopped");
         --m.needInput;
+        const int64_t t1 = QpcNow();
+        m.timing.waitInput.Add(QpcToMs(t1 - t0));
         CHECK_HR(m.mft->ProcessInput(m.inId, sample, 0));
+        m.RecordInput(sample, t1, QpcNow());
         return;
     }
     // sync：送一張，然後把拿得到的輸出全部拿完
+    const int64_t t0 = QpcNow();
+    {
+        LONGLONG t = 0;
+        if (SUCCEEDED(sample->GetSampleTime(&t))) m.inputAt[t] = t0;
+    }
     HRESULT hr = m.mft->ProcessInput(m.inId, sample, 0);
     if (hr == MF_E_NOTACCEPTING) {
         while (m.PullOneOutput() != PullResult::NeedMoreInput) {}
@@ -463,6 +506,7 @@ void H264Encoder::Encode(IMFSample* sample)
     }
     CHECK_HR(hr);
     while (m.PullOneOutput() != PullResult::NeedMoreInput) {}
+    m.timing.processInput.Add(QpcToMs(QpcNow() - t0));
 }
 
 void H264Encoder::ForceKeyFrame()
