@@ -1,7 +1,7 @@
 // Lab 4 — H.264 硬體編碼
 //
 //   dda_encode.exe [--output N] [--width 1280] [--height 720] [--fps 30] [--seconds 5]
-//                  [--bitrate 8000000] [--gop 60] [--out output.h264] [--software] [--timer-1ms] [--sync-gpu]
+//                  [--bitrate 8000000] [--gop 60] [--out output.h264] [--software] [--timer-1ms] [--sync-gpu] [--no-low-latency]
 //
 // 學習重點：
 //   1. MFTEnumEx 列舉硬體 encoder，沒有就 fallback 到軟體，印出實際用的是哪一個
@@ -35,7 +35,7 @@ static int Run(const Args& args)
     ec.fps = (UINT)args.GetInt("--fps", 30);
     ec.bitrate = (UINT)args.GetInt("--bitrate", 8'000'000);
     ec.gopSize = (UINT)args.GetInt("--gop", ec.fps * 2);
-    ec.lowLatency = true;
+    ec.lowLatency = !args.Has("--no-low-latency"); // 關掉時 encoder 可以累積多張、也可能用 B-frame（延遲變大）
     ec.preferHardware = !args.Has("--software");
     const UINT seconds = (UINT)args.GetInt("--seconds", 5);
     const UINT totalFrames = ec.fps * seconds;
@@ -100,6 +100,7 @@ static int Run(const Args& args)
         std::printf("Encoder : %s\n          hardware=%s async=%s d3d11-input=%s\n", encoder.Name().c_str(),
                     encoder.IsHardware() ? "yes" : "NO (software fallback)", encoder.IsAsync() ? "yes" : "no",
                     encoder.UsesD3D() ? "yes" : "no");
+        std::printf("          low-latency=%s\n", ec.lowLatency ? "yes" : "no (--no-low-latency)");
         if (!encoder.UsesD3D())
             std::printf("          NOTE: encoder can't read GPU textures -> each frame is read back to CPU (slow path)\n");
     };
