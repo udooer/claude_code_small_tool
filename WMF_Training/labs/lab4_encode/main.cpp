@@ -172,6 +172,7 @@ static int Run(const Args& args)
         submitMs.Reset();
     }
     }
+    const EncoderTiming et = encoder.Timing(); // 必須在 Shutdown 之前取：Shutdown 會釋放 encoder 內部狀態
     encoder.Shutdown();
     std::fclose(out);
 
@@ -183,7 +184,6 @@ static int Run(const Args& args)
     std::printf("  file size   : %lld bytes, average %.2f Mbps (target %.2f Mbps)\n", (long long)bytesOut.load(),
                 actualBps / 1e6, ec.bitrate / 1e6);
     std::printf("  Encode() call time: avg %.2f ms, max %.2f ms\n", submitMs.Avg(), submitMs.max);
-    const EncoderTiming et = encoder.Timing();
     auto line = [](const char* name, const Stat& s) {
         if (s.count) std::printf("    %-24s avg %6.2f ms, max %6.2f ms  (n=%d)\n", name, s.Avg(), s.max, s.count);
     };
