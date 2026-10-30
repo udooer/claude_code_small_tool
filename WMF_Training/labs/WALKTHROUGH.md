@@ -157,13 +157,15 @@ Lab 2 的計時口試題（「你量到 0.05 ms，為什麼可能是錯的？」
 
 這是**最值得花時間**的一題。整條 pipeline 的顏色正確性都靠這裡建立的觀念。
 
+> 實機做 Lab 3 時的問答整理（RGB/YUV 的概念與記憶體排列、轉換數學、`--vp-*` 與 `--decode-*`、`--patches` 實測結果、Readback 與 pitch、`Nv12ToBgra`、JPEG/H.264 的色彩空間）：見 **[lab3_nv12/NOTES.md](lab3_nv12/NOTES.md)**。
+
 ### 跑起來：先做對的版本
 
 ```bat
 dda_nv12.exe --patches
 ```
 
-程式會在螢幕上蓋一個全螢幕色塊視窗（約 1 秒），擷取後印出（示意）：
+程式會在螢幕上蓋一個全螢幕色塊視窗（約 1 秒），擷取後印出（Intel UHD 620 實測）：
 ```
 GPU  (VideoProcessor) writes NV12 as : BT.709 studio(16-235)
 CPU  (SaveNV12AsBmp) assumes         : BT.709 studio(16-235)
@@ -171,9 +173,9 @@ NV12 readback: 1280x720, RowPitch=1280 (width=1280)  -> UV plane offset = RowPit
 
 patch  | YUV measured    | YUV expected    | RGB after decode | result
 -------+-----------------+-----------------+------------------+-------
-red    |  63 102 240     |  63 102 240     | 255   0   0      | OK
-green  | 173  42  26     | 173  42  26     |   0 255   0      | OK
-blue   |  32 240 118     |  32 240 118     |   0   0 255      | OK
+red    |  63 102 240     |  63 102 240     | 255   1   0      | OK
+green  | 173  42  26     | 173  42  26     |   0 255   1      | OK
+blue   |  32 240 118     |  32 240 118     |   1   0 255      | OK
 white  | 235 128 128     | 235 128 128     | 255 255 255      | OK
 black  |  16 128 128     |  16 128 128     |   0   0   0      | OK
 gray   | 126 128 128     | 126 128 128     | 128 128 128      | OK

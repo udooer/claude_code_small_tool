@@ -449,6 +449,8 @@ printf("Scale: %.3f ms\n", (t1.QuadPart - t0.QuadPart) * 1000.0 / freq.QuadPart)
 
 ## Lab 3｜BGRA → NV12 驗證
 
+> 實機問答與複習題：[labs/lab3_nv12/NOTES.md](labs/lab3_nv12/NOTES.md)
+
 ### 真正在考什麼
 
 1. **NV12 記憶體佈局**：Y plane 全解析度 + UV plane 半解析度且 U/V 交錯，兩個 plane 在 Map 之後**接在同一塊記憶體**。
