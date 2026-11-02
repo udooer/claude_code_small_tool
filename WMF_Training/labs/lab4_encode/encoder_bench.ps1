@@ -32,7 +32,8 @@ param(
     [string]$OutDir = '',      # 結果資料夾；預設在目前資料夾建立 bench_<日期時間>
     [int]$CooldownSec = 2,     # 每次執行之間休息幾秒
     [switch]$NoFfprobe,        # 不做 ffprobe / ffmpeg 分析
-    [string]$FfmpegDir = ''    # ffprobe.exe / ffmpeg.exe 所在資料夾；預設找 PATH 和常見的安裝位置
+    [string]$FfmpegDir = '',   # ffprobe.exe / ffmpeg.exe 所在資料夾；預設找 PATH 和常見的安裝位置
+    [string]$Filter = ''       # 只跑名稱符合這個 regex 的組態，例如 -Filter timer1ms
 )
 
 $ErrorActionPreference = 'Continue'   # 'Stop' 會讓原生程式的 stderr 變成例外（PowerShell 5.1）
@@ -176,6 +177,20 @@ if ($Quick) {
     Add-Cfg 'E' 'LL_720p_23' ($LL + @('--fps', '23'))
     Add-Cfg 'E' 'LL_720p_37' ($LL + @('--fps', '37'))
     Add-Cfg 'E' 'NLL_B0_720p_37' ($NLLB0 + @('--fps', '37'))
+    # F. 計時器解析度 1 ms：迴圈準時送入，排除送入時刻被 15.6 ms 刻度量化的影響。
+    #    37 / 23 fps 和 60 Hz 不成倍數：如果 ProcessInput 仍然固定約 16 ms，就是固定長度的等待，不是等螢幕更新
+    Add-Cfg 'F' 'LL_720p_23_timer1ms' ($LL + @('--fps', '23', '--timer-1ms'))
+    Add-Cfg 'F' 'LL_720p_37_timer1ms' ($LL + @('--fps', '37', '--timer-1ms'))
+    Add-Cfg 'F' 'LL_720p_60_timer1ms' ($LL + @('--fps', '60', '--timer-1ms'))
+    Add-Cfg 'F' 'NLL_B0_720p_37_timer1ms' ($NLLB0 + @('--fps', '37', '--timer-1ms'))
+    Add-Cfg 'F' 'NLL_B0_720p_60_timer1ms' ($NLLB0 + @('--fps', '60', '--timer-1ms'))
+    Add-Cfg 'F' 'NLL_B0_720p_120_timer1ms' ($NLLB0 + @('--fps', '120', '--timer-1ms'))
+}
+if ($Filter) {
+    $kept = @($Configs | Where-Object { $_.Name -match $Filter })
+    if ($kept.Count -eq 0) { Write-Host ('-Filter {0} 沒有符合任何組態。' -f $Filter) -ForegroundColor Red; exit 1 }
+    $Configs.Clear()
+    foreach ($k in $kept) { $Configs.Add($k) }
 }
 
 # ======================================================================
@@ -210,7 +225,7 @@ try {
 try { $Sys.Add(('PowerPlan: {0}' -f ((powercfg /getactivescheme) -join ' ').Trim())) } catch {}
 $Sys.Add(('Refresh  : {0} Hz used for phase analysis' -f $RefreshHz))
 $Sys.Add(('Tools    : ffprobe={0}, ffmpeg={1}' -f $(if ($Ffprobe) { $Ffprobe } else { 'not found' }), $(if ($Ffmpeg) { $Ffmpeg } else { 'not found' })))
-$Sys.Add(('Settings : repeat={0}, seconds={1}, configs={2}, quick={3}' -f $Repeat, $Seconds, $Configs.Count, [bool]$Quick))
+$Sys.Add(('Settings : repeat={0}, seconds={1}, configs={2}, quick={3}, filter={4}' -f $Repeat, $Seconds, $Configs.Count, [bool]$Quick, $Filter))
 $CaptureList = @()
 if (Test-Path $CaptureExe) { $CaptureList = (Run-Native $CaptureExe @('--list')).Lines }
 
