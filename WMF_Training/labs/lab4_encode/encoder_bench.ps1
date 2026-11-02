@@ -31,7 +31,8 @@ param(
     [switch]$Quick,            # 快速模式：少量組態、各 1 次、每次 3 秒
     [string]$OutDir = '',      # 結果資料夾；預設在目前資料夾建立 bench_<日期時間>
     [int]$CooldownSec = 2,     # 每次執行之間休息幾秒
-    [switch]$NoFfprobe         # 不做 ffprobe / ffmpeg 分析
+    [switch]$NoFfprobe,        # 不做 ffprobe / ffmpeg 分析
+    [string]$FfmpegDir = ''    # ffprobe.exe / ffmpeg.exe 所在資料夾；預設找 PATH 和常見的安裝位置
 )
 
 $ErrorActionPreference = 'Continue'   # 'Stop' 會讓原生程式的 stderr 變成例外（PowerShell 5.1）
@@ -68,6 +69,28 @@ function Get-PhaseR([double[]]$t, [double]$P) {
     return [Math]::Sqrt($c * $c + $s * $s) / $t.Count
 }
 
+function Get-BestPeriod([double[]]$t, [double]$from, [double]$to, [double]$step) {
+    # 在 [from, to] 之間找讓相位最集中的週期，回傳 @(R, 週期)
+    $best = -1.0; $bestP = $from
+    for ($P = $from; $P -le $to + 1e-9; $P += $step) {
+        $Rv = Get-PhaseR $t $P   # 注意：PowerShell 變數不分大小寫，不能叫 $R（會蓋掉別的 $r）
+        if ($Rv -gt $best) { $best = $Rv; $bestP = $P }
+    }
+    return @($best, $bestP)
+}
+
+# 直方圖：每 2 ms 一格，0..40 ms 共 20 格，最後一格是 >= 40 ms
+function Get-Hist([double[]]$vals) {
+    $h = New-Object int[] 21
+    foreach ($v in $vals) {
+        if ($v -lt 0) { continue }
+        $i = [int][Math]::Floor($v / 2.0)
+        if ($i -gt 20) { $i = 20 }
+        $h[$i]++
+    }
+    return ($h -join ' ')
+}
+
 function Run-Native([string]$exe, [string[]]$argList) {
     $out = & $exe @argList 2>&1 | ForEach-Object { "$_" }
     return [pscustomobject]@{ Lines = @($out); Code = $LASTEXITCODE }
@@ -89,8 +112,21 @@ $CaptureExe = Join-Path (Split-Path $Exe) 'dda_capture.exe'
 
 $Ffprobe = $null; $Ffmpeg = $null
 if (-not $NoFfprobe) {
-    $p = Get-Command ffprobe -ErrorAction SilentlyContinue; if ($p) { $Ffprobe = $p.Path }
-    $p = Get-Command ffmpeg -ErrorAction SilentlyContinue; if ($p) { $Ffmpeg = $p.Path }
+    # 順序：-FfmpegDir > PATH > 常見的解壓縮 / 安裝位置
+    $ffDirs = @()
+    if ($FfmpegDir) { $ffDirs += $FfmpegDir }
+    $p = Get-Command ffprobe -ErrorAction SilentlyContinue
+    if ($p) { $ffDirs += (Split-Path $p.Path) }
+    $patterns = @('C:\ffmpeg\bin', 'C:\ffmpeg*\bin', 'D:\ffmpeg*\bin', "$env:ProgramFiles\ffmpeg*\bin",
+        "$env:USERPROFILE\ffmpeg*\bin", "$env:USERPROFILE\Downloads\ffmpeg*\bin", "$env:USERPROFILE\Downloads\ffmpeg*\ffmpeg*\bin",
+        "$env:USERPROFILE\Desktop\ffmpeg*\bin", "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\*FFmpeg*\ffmpeg*\bin")
+    foreach ($pat in $patterns) {
+        foreach ($d in @(Resolve-Path $pat -ErrorAction SilentlyContinue)) { $ffDirs += $d.Path }
+    }
+    foreach ($d in $ffDirs) {
+        if (-not $Ffprobe -and (Test-Path (Join-Path $d 'ffprobe.exe'))) { $Ffprobe = (Join-Path $d 'ffprobe.exe') }
+        if (-not $Ffmpeg -and (Test-Path (Join-Path $d 'ffmpeg.exe'))) { $Ffmpeg = (Join-Path $d 'ffmpeg.exe') }
+    }
 }
 
 if (-not $OutDir) { $OutDir = Join-Path (Get-Location).Path ('bench_' + (Get-Date -Format 'yyyyMMdd_HHmmss')) }
@@ -173,7 +209,7 @@ try {
 } catch {}
 try { $Sys.Add(('PowerPlan: {0}' -f ((powercfg /getactivescheme) -join ' ').Trim())) } catch {}
 $Sys.Add(('Refresh  : {0} Hz used for phase analysis' -f $RefreshHz))
-$Sys.Add(('Tools    : ffprobe={0}, ffmpeg={1}' -f [bool]$Ffprobe, [bool]$Ffmpeg))
+$Sys.Add(('Tools    : ffprobe={0}, ffmpeg={1}' -f $(if ($Ffprobe) { $Ffprobe } else { 'not found' }), $(if ($Ffmpeg) { $Ffmpeg } else { 'not found' })))
 $Sys.Add(('Settings : repeat={0}, seconds={1}, configs={2}, quick={3}' -f $Repeat, $Seconds, $Configs.Count, [bool]$Quick))
 $CaptureList = @()
 if (Test-Path $CaptureExe) { $CaptureList = (Run-Native $CaptureExe @('--list')).Lines }
@@ -217,7 +253,8 @@ $Stats = @('encode', 'late', 'gpuwait', 'wait', 'pi', 'i2n', 'lat')
 $Cols = @('group', 'config', 'rep', 'exit_code', 'hw', 'async', 'd3d', 'll', 'bframes', 'sync_gpu', 'timer1ms', 'width', 'height',
     'fps', 'frames_in', 'frames_out', 'keyframes', 'new', 'repeated', 'wall_ms', 'real_fps', 'bytes', 'mbps')
 foreach ($s in $Stats) { foreach ($k in @('avg', 'min', 'p50', 'p95', 'max')) { $Cols += ('{0}_{1}' -f $s, $k) } }
-$Cols += @('enc_first', 'enc_rest_avg', 'pi_spread', 'R_start', 'R_end', 'best_period', 'late_frames', 'access_lost',
+$Cols += @('enc_first', 'enc_rest_avg', 'pi_spread', 'R_end_vs', 'R_start_vs', 'P_vs', 'R_end_tm', 'R_start_tm', 'R_end_best', 'P_end_best',
+    'R_start_best', 'P_start_best', 'late_frames', 'pi_hist', 'late_hist', 'access_lost',
     'fallback', 'encoder', 'error')
 
 $Rows = New-Object System.Collections.Generic.List[object]
@@ -277,17 +314,23 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
                 $ends = @($fr | Select-Object -Skip 1 | ForEach-Object { ToD $_.submit_end_ms } | Where-Object { $_ -ge 0 })
                 $starts = @($fr | Select-Object -Skip 1 | ForEach-Object { (ToD $_.submit_end_ms) - (ToD $_.encode_ms) })
                 if ($ends.Count -ge 10) {
-                    # 螢幕更新週期可能是 59.94 之類，所以在 ±0.5% 內找最集中的週期
-                    $bestR = -1.0; $bestP = $PeriodMs
-                    for ($k = -20; $k -le 20; $k++) {
-                        $P = $PeriodMs * (1.0 + $k * 0.00025)
-                        $Rv = Get-PhaseR ([double[]]$ends) $P   # 注意：PowerShell 變數不分大小寫，不能叫 $R（會蓋掉 $r）
-                        if ($Rv -gt $bestR) { $bestR = $Rv; $bestP = $P }
-                    }
-                    $row.R_end = $bestR.ToString('0.000', $Inv)
-                    $row.R_start = (Get-PhaseR ([double[]]$starts) $bestP).ToString('0.000', $Inv)
-                    $row.best_period = $bestP.ToString('0.000', $Inv)
+                    $endT = [double[]]$ends; $startT = [double[]]$starts
+                    # (1) 螢幕更新：WMI 會把 59.94 Hz 報成 59，所以在 59.6..60.2 Hz 附近細找
+                    $vs = Get-BestPeriod $endT 16.61 16.78 0.002
+                    $row.R_end_vs = $vs[0].ToString('0.000', $Inv)
+                    $row.P_vs = $vs[1].ToString('0.000', $Inv)
+                    $row.R_start_vs = (Get-PhaseR $startT $vs[1]).ToString('0.000', $Inv)
+                    # (2) Windows 預設計時器刻度 15.625 ms
+                    $row.R_end_tm = (Get-PhaseR $endT 15.625).ToString('0.000', $Inv)
+                    $row.R_start_tm = (Get-PhaseR $startT 15.625).ToString('0.000', $Inv)
+                    # (3) 不預設答案：15.0..17.6 ms 之間最集中的週期
+                    $be = Get-BestPeriod $endT 15.0 17.6 0.01
+                    $row.R_end_best = $be[0].ToString('0.000', $Inv); $row.P_end_best = $be[1].ToString('0.00', $Inv)
+                    $bs = Get-BestPeriod $startT 15.0 17.6 0.01
+                    $row.R_start_best = $bs[0].ToString('0.000', $Inv); $row.P_start_best = $bs[1].ToString('0.00', $Inv)
                 }
+                $row.pi_hist = Get-Hist ([double[]]@($fr | Select-Object -Skip 1 | ForEach-Object { ToD $_.process_input_ms }))
+                $row.late_hist = Get-Hist ([double[]]@($fr | Select-Object -Skip 1 | ForEach-Object { ToD $_.late_ms }))
                 $fpsV = ToD $row.fps
                 if ($fpsV) {
                     $limit = 1000.0 / $fpsV
@@ -423,17 +466,50 @@ $Report.Add('')
 $hdr2 = '{0,-24} {1,7} {2,7} {3,7} {4,7} {5,8} {6,7} {7,7} {8,7} {9,7} {10,8} {11,6}'
 $Report.Add('--- Table 2: diagnostics ---')
 $Report.Add('wait = waiting for NeedInput, i2n = ProcessInput return -> next NeedInput, first = Encode() of frame 0,')
-$Report.Add('spread = ProcessInput p95-p5, R_end/R_start = phase concentration of Encode() end/start times against the')
-$Report.Add('display period (1 = locked to one phase, ~0 = random), period = best period found within +/-0.5%.')
-$Report.Add(($hdr2 -f 'config', 'wait', 'i2n p50', 'i2n p95', 'gpuwait', 'first', 'rest', 'spread', 'R_end', 'R_start', 'period', 'lateF'))
+$Report.Add('spread = ProcessInput p95-p5 (ms), lateF = frames submitted more than one frame period late.')
+$Report.Add(($hdr2 -f 'config', 'wait', 'i2n p50', 'i2n p95', 'gpuwait', 'first', 'rest', 'spread', 'lateF', '', '', ''))
 foreach ($c in $Configs) {
     $rs = @($Rows | Where-Object { $_.config -eq $c.Name })
     $Report.Add(($hdr2 -f $c.Name, (Fmt (Agg $rs 'wait_avg') '0.00'), (Fmt (Agg $rs 'i2n_p50') '0.00'), (Fmt (Agg $rs 'i2n_p95') '0.00'),
             (Fmt (Agg $rs 'gpuwait_avg') '0.00'), (Fmt (Agg $rs 'enc_first') '0.0'), (Fmt (Agg $rs 'enc_rest_avg') '0.00'),
-            (Fmt (Agg $rs 'pi_spread') '0.00'), (Fmt (Agg $rs 'R_end') '0.000'), (Fmt (Agg $rs 'R_start') '0.000'),
-            (Fmt (Agg $rs 'best_period') '0.000'), (Fmt (Agg $rs 'late_frames') '0')))
+            (Fmt (Agg $rs 'pi_spread') '0.00'), (Fmt (Agg $rs 'late_frames') '0'), '', '', ''))
 }
 $Report.Add('')
+
+$hdr5 = '{0,-24} {1,7} {2,7} {3,7} {4,7} {5,7} {6,8} {7,7} {8,8} {9,7}'
+$Report.Add('--- Table 2b: phase locking of Encode() end / start times ---')
+$Report.Add('R = Rayleigh concentration of the times modulo a period: 1 = always the same phase, ~0.1 = random for ~150 frames.')
+$Report.Add('vs = display refresh (best period in 16.61..16.78 ms), tm = Windows timer tick 15.625 ms,')
+$Report.Add('best = most concentrated period anywhere in 15.0..17.6 ms. Locked ends with unlocked starts = waiting for that clock.')
+$Report.Add(($hdr5 -f 'config', 'Rend vs', 'Rsta vs', 'P vs', 'Rend tm', 'Rsta tm', 'Rend bst', 'P end', 'Rsta bst', 'P sta'))
+foreach ($c in $Configs) {
+    $rs = @($Rows | Where-Object { $_.config -eq $c.Name })
+    $Report.Add(($hdr5 -f $c.Name, (Fmt (Agg $rs 'R_end_vs') '0.000'), (Fmt (Agg $rs 'R_start_vs') '0.000'), (Fmt (Agg $rs 'P_vs') '0.000'),
+            (Fmt (Agg $rs 'R_end_tm') '0.000'), (Fmt (Agg $rs 'R_start_tm') '0.000'), (Fmt (Agg $rs 'R_end_best') '0.000'),
+            (Fmt (Agg $rs 'P_end_best') '0.00'), (Fmt (Agg $rs 'R_start_best') '0.000'), (Fmt (Agg $rs 'P_start_best') '0.00')))
+}
+$Report.Add('')
+
+function Sum-Hist($rs, [string]$col) {
+    $tot = New-Object int[] 21
+    foreach ($x in $rs) {
+        $parts = "$($x.$col)" -split ' '
+        if ($parts.Count -ne 21) { continue }
+        for ($i = 0; $i -lt 21; $i++) { $tot[$i] += [int]$parts[$i] }
+    }
+    return $tot
+}
+foreach ($hc in @(@('pi_hist', 'ProcessInput'), @('late_hist', 'submit lateness'))) {
+    $Report.Add(('--- Table 5: {0} histogram, frames per 2 ms bin, all runs summed (frame 0 excluded) ---' -f $hc[1]))
+    $binHdr = ((0..19 | ForEach-Object { '{0,4}' -f ($_ * 2) }) -join '') + ' >=40'   # 先組好：逗號比 + 先結合
+    $Report.Add(('{0,-24} {1}' -f 'config \ ms', $binHdr))
+    foreach ($c in $Configs) {
+        $rs = @($Rows | Where-Object { $_.config -eq $c.Name })
+        $tot = Sum-Hist $rs $hc[0]
+        $Report.Add(('{0,-24} {1}' -f $c.Name, (($tot | ForEach-Object { '{0,4}' -f $_ }) -join '')))
+    }
+    $Report.Add('')
+}
 
 $Report.Add('--- Table 3: run-to-run variation (per run: real fps / pi p50 / lat p50) ---')
 foreach ($c in $Configs) {
