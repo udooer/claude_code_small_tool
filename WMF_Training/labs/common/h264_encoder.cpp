@@ -268,6 +268,7 @@ struct H264Encoder::Impl : std::enable_shared_from_this<H264Encoder::Impl> {
 
         EncodedFrame f;
         out->GetSampleTime(&f.sampleTime);
+        if (drainComplete) ++timing.outputsAfterDrainComplete;
         auto it = inputAt.find(f.sampleTime);
         if (it != inputAt.end()) {
             const int64_t now = QpcNow();
@@ -306,7 +307,9 @@ EncoderTiming H264Encoder::Timing() const
 {
     if (!impl_) return {};
     std::lock_guard<std::mutex> lk(impl_->mu);
-    return impl_->timing;
+    EncoderTiming t = impl_->timing;
+    for (const auto& kv : impl_->inputAt) t.neverOutput.push_back(kv.first);
+    return t;
 }
 
 void H264Encoder::Init(const EncoderConfig& cfg, IMFDXGIDeviceManager* deviceManager, OutputFn onOutput)

@@ -128,6 +128,7 @@ static int Run(const Args& args)
     std::vector<double> submitEndMs;   // 每幀 Encode() 回來的時刻（從 start 起算）
     std::vector<char> newFlags;        // 每幀是不是新的桌面畫面
     double wallMs = 0;
+    int drainedOut = 0; // Drain() 回來時已經拿到的輸出張數
 
     // 硬體 encoder 在某些機器/driver 上會在第一次 ProcessOutput 就失敗（例如舊版 Intel driver 回 E_UNEXPECTED）。
     // 還沒產生任何輸出前失敗的話，自動改用軟體 encoder 從頭再錄一次，而不是直接結束。
@@ -176,6 +177,9 @@ static int Run(const Args& args)
 
     encoder.Drain(); // 不 drain 會少最後幾張
     wallMs = QpcToMs(QpcNow() - start);
+    // 有些 encoder 在 Drain 回來之後才交出最後幾張（或根本不交）。多等一下，並記錄下來
+    drainedOut = framesOut.load();
+    for (int w = 0; w < 50 && framesOut.load() < (int)totalFrames; ++w) Sleep(10);
     break;
     } catch (const std::exception& e) {
         if (attempt > 0 || !encoder.IsHardware() || framesOut.load() > 0) throw;
@@ -205,6 +209,18 @@ static int Run(const Args& args)
     std::printf("  frames in   : %u  (new desktop images %d, repeated %d)\n", totalFrames, newFrames, repeatedFrames);
     std::printf("  frames out  : %d  (keyframes %d)%s\n", framesOut.load(), keyframes.load(),
                 framesOut.load() == (int)totalFrames ? "" : "   <-- should equal frames in!");
+    const int afterDrain = framesOut.load() - drainedOut;
+    if (afterDrain > 0) std::printf("                %d of them arrived after Drain() returned\n", afterDrain);
+    if (et.outputsAfterDrainComplete > 0)
+        std::printf("                %d output(s) arrived after METransformDrainComplete\n", et.outputsAfterDrainComplete);
+    std::string missingIdx;
+    for (size_t k = 0; k < et.neverOutput.size(); ++k) {
+        const long long idx = (long long)std::llround((double)et.neverOutput[k] * ec.fps / 1e7); // sample time -> 幀號
+        if (k < 20) missingIdx += (missingIdx.empty() ? "" : ",") + std::to_string(idx);
+    }
+    if (!et.neverOutput.empty())
+        std::printf("                missing frames (never output): %zu  [%s%s]\n", et.neverOutput.size(), missingIdx.c_str(),
+                    et.neverOutput.size() > 20 ? ",..." : "");
     // 跟得上的話，實際花的時間 ≈ 影片長度。明顯比較久代表每幀的處理時間超過 1/fps。
     std::printf("  wall time   : %.2f s for %u s of video (%.0f frames/s actually processed)%s\n", wallMs / 1000,
                 seconds, totalFrames * 1000.0 / wallMs, wallMs > seconds * 1000.0 * 1.05 ? "   <-- could not keep up" : "");
@@ -266,6 +282,10 @@ static int Run(const Args& args)
     kv("seconds", std::to_string(seconds));
     kv("frames_in", std::to_string(totalFrames));
     kv("frames_out", std::to_string(framesOut.load()));
+    kv("after_drain", std::to_string(afterDrain));
+    kv("after_drain_complete", std::to_string(et.outputsAfterDrainComplete));
+    kv("missing", std::to_string(et.neverOutput.size()));
+    if (!missingIdx.empty()) kv("missing_idx", missingIdx);
     kv("keyframes", std::to_string(keyframes.load()));
     kv("new", std::to_string(newFrames));
     kv("repeated", std::to_string(repeatedFrames));

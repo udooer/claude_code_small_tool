@@ -266,7 +266,8 @@ Start-Sleep -Seconds 5
 # ======================================================================
 $Stats = @('encode', 'late', 'gpuwait', 'wait', 'pi', 'i2n', 'lat')
 $Cols = @('group', 'config', 'rep', 'exit_code', 'hw', 'async', 'd3d', 'll', 'bframes', 'sync_gpu', 'timer1ms', 'width', 'height',
-    'fps', 'frames_in', 'frames_out', 'keyframes', 'new', 'repeated', 'wall_ms', 'real_fps', 'bytes', 'mbps')
+    'fps', 'frames_in', 'frames_out', 'after_drain', 'after_drain_complete', 'missing', 'missing_idx', 'keyframes', 'new', 'repeated',
+    'wall_ms', 'real_fps', 'bytes', 'mbps')
 foreach ($s in $Stats) { foreach ($k in @('avg', 'min', 'p50', 'p95', 'max')) { $Cols += ('{0}_{1}' -f $s, $k) } }
 $Cols += @('enc_first', 'enc_rest_avg', 'pi_spread', 'R_end_vs', 'R_start_vs', 'P_vs', 'R_end_tm', 'R_start_tm', 'R_end_best', 'P_end_best',
     'R_start_best', 'P_start_best', 'late_frames', 'pi_hist', 'late_hist', 'access_lost',
@@ -276,6 +277,8 @@ $Rows = New-Object System.Collections.Generic.List[object]
 $RawResults = New-Object System.Collections.Generic.List[string]
 $n = 0
 $PeriodMs = 1000.0 / $RefreshHz
+$VsFrom = 1000.0 / ($RefreshHz + 1.0)
+$VsTo = 1000.0 / ($RefreshHz - 0.5)
 
 for ($rep = 1; $rep -le $Repeat; $rep++) {
     foreach ($c in $Configs) {
@@ -330,8 +333,8 @@ for ($rep = 1; $rep -le $Repeat; $rep++) {
                 $starts = @($fr | Select-Object -Skip 1 | ForEach-Object { (ToD $_.submit_end_ms) - (ToD $_.encode_ms) })
                 if ($ends.Count -ge 10) {
                     $endT = [double[]]$ends; $startT = [double[]]$starts
-                    # (1) 螢幕更新：WMI 會把 59.94 Hz 報成 59，所以在 59.6..60.2 Hz 附近細找
-                    $vs = Get-BestPeriod $endT 16.61 16.78 0.002
+                    # (1) 螢幕更新：WMI 會把 59.94 Hz 報成 59，所以在「報告值 -0.5 Hz .. +1 Hz」之間細找
+                    $vs = Get-BestPeriod $endT $VsFrom $VsTo ($VsFrom / 5000.0)
                     $row.R_end_vs = $vs[0].ToString('0.000', $Inv)
                     $row.P_vs = $vs[1].ToString('0.000', $Inv)
                     $row.R_start_vs = (Get-PhaseR $startT $vs[1]).ToString('0.000', $Inv)
@@ -464,9 +467,9 @@ $Report.Add('All times in ms. Values are the mean over runs unless noted; "min"/
 $Report.Add('pi = ProcessInput, lat = input->output latency, late = how late the frame was submitted vs schedule.')
 $Report.Add('')
 
-$hdr = '{0,-24} {1,5} {2,13} {3,7} {4,7} {5,7} {6,7} {7,7} {8,7} {9,7} {10,7} {11,6}'
+$hdr = '{0,-24} {1,5} {2,13} {3,7} {4,7} {5,7} {6,7} {7,7} {8,7} {9,7} {10,7} {11,4} {12,5}'
 $Report.Add('--- Table 1: throughput and latency ---')
-$Report.Add(($hdr -f 'config', 'ok', 'real fps(min)', 'enc avg', 'pi p50', 'pi p95', 'lat p50', 'lat p95', 'lat max', 'late95', 'Mbps', 'kf'))
+$Report.Add(($hdr -f 'config', 'ok', 'real fps(min)', 'enc avg', 'pi p50', 'pi p95', 'lat p50', 'lat p95', 'lat max', 'late95', 'Mbps', 'kf', 'miss'))
 foreach ($c in $Configs) {
     $rs = @($Rows | Where-Object { $_.config -eq $c.Name })
     $ok = @($rs | Where-Object { $_.wall_ms -ne '' -and $_.frames_out -eq $_.frames_in }).Count
@@ -474,7 +477,7 @@ foreach ($c in $Configs) {
     $Report.Add(($hdr -f $c.Name, ('{0}/{1}' -f $ok, $rs.Count), $fpsTxt, (Fmt (Agg $rs 'encode_avg') '0.00'),
             (Fmt (Agg $rs 'pi_p50') '0.00'), (Fmt (Agg $rs 'pi_p95') '0.00'), (Fmt (Agg $rs 'lat_p50') '0.00'),
             (Fmt (Agg $rs 'lat_p95') '0.00'), (Fmt (Agg $rs 'lat_max' 'max') '0.0'), (Fmt (Agg $rs 'late_p95') '0.0'),
-            (Fmt (Agg $rs 'mbps') '0.00'), (Fmt (Agg $rs 'keyframes') '0')))
+            (Fmt (Agg $rs 'mbps') '0.00'), (Fmt (Agg $rs 'keyframes') '0'), (Fmt (Agg $rs 'missing') '0.0')))
 }
 $Report.Add('')
 
@@ -494,7 +497,7 @@ $Report.Add('')
 $hdr5 = '{0,-24} {1,7} {2,7} {3,7} {4,7} {5,7} {6,8} {7,7} {8,8} {9,7}'
 $Report.Add('--- Table 2b: phase locking of Encode() end / start times ---')
 $Report.Add('R = Rayleigh concentration of the times modulo a period: 1 = always the same phase, ~0.1 = random for ~150 frames.')
-$Report.Add('vs = display refresh (best period in 16.61..16.78 ms), tm = Windows timer tick 15.625 ms,')
+$Report.Add(('vs = display refresh (best period in {0:0.000}..{1:0.000} ms), tm = Windows timer tick 15.625 ms,' -f $VsFrom, $VsTo))
 $Report.Add('best = most concentrated period anywhere in 15.0..17.6 ms. Locked ends with unlocked starts = waiting for that clock.')
 $Report.Add(($hdr5 -f 'config', 'Rend vs', 'Rsta vs', 'P vs', 'Rend tm', 'Rsta tm', 'Rend bst', 'P end', 'Rsta bst', 'P sta'))
 foreach ($c in $Configs) {
@@ -548,10 +551,17 @@ if ($Probe.Count) {
     $Report.Add('')
 }
 
-$bad = @($Rows | Where-Object { $_.error -or ("$($_.exit_code)" -ne '0') -or (ToD $_.access_lost) -gt 0 -or $_.fallback -eq 1 })
+$bad = @($Rows | Where-Object { $_.error -or ("$($_.exit_code)" -ne '0') -or (ToD $_.access_lost) -gt 0 -or $_.fallback -eq 1 -or
+        (ToD $_.missing) -gt 0 -or (ToD $_.after_drain) -gt 0 -or (ToD $_.after_drain_complete) -gt 0 })
 if ($bad.Count) {
     $Report.Add('--- Problems ---')
-    foreach ($b in $bad) { $Report.Add(('{0} rep {1}: exit={2} access_lost={3} fallback={4} {5}' -f $b.config, $b.rep, $b.exit_code, $b.access_lost, $b.fallback, $b.error)) }
+    $Report.Add('missing = frames sent but never output (frame numbers in []), after_drain = outputs that arrived after Drain() returned,')
+    $Report.Add('after_dc = outputs that arrived after METransformDrainComplete.')
+    foreach ($b in $bad) {
+        $Report.Add(('{0} rep {1}: exit={2} out={3}/{4} missing={5} [{6}] after_drain={7} after_dc={8} access_lost={9} fallback={10} {11}' -f
+                $b.config, $b.rep, $b.exit_code, $b.frames_out, $b.frames_in, $b.missing, $b.missing_idx, $b.after_drain,
+                $b.after_drain_complete, $b.access_lost, $b.fallback, $b.error))
+    }
     $Report.Add('')
 }
 

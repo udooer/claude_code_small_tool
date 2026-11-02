@@ -50,6 +50,8 @@ struct EncoderTiming {
     Stat inputToOutput;    // 送進去到拿到同一張的輸出（以 sample time 對應）= encoder 延遲
     std::vector<double> inputDoneAtMs; // 每次 ProcessInput 回來的時刻（從 Init 起算，依送入順序）
     std::vector<double> outputAtMs;    // 每次拿到輸出的時刻（從 Init 起算，依輸出順序）
+    std::vector<int64_t> neverOutput;  // 送進去了、卻一直沒有拿到輸出的 sample time（遺失的幀）
+    int outputsAfterDrainComplete = 0; // async：收到 METransformDrainComplete 之後才到的輸出（不該發生）
 };
 
 struct EncodedFrame {
